@@ -28,3 +28,11 @@ type DNSResultMsg struct {
 	Names []string
 	Err   error
 }
+
+// BansLoadedMsg carries loaded bans.
+type BansLoadedMsg struct {
+	Bans []redis.Ban
+}
+
+// BansPollTickMsg triggers a bans refresh.
+type BansPollTickMsg struct{}

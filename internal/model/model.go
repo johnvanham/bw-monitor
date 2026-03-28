@@ -16,8 +16,10 @@ import (
 type viewState int
 
 const (
-	viewList viewState = iota
-	viewDetail
+	viewReportsList viewState = iota
+	viewReportDetail
+	viewBansList
+	viewBanDetail
 )
 
 const pollInterval = 2 * time.Second
@@ -58,8 +60,14 @@ type Model struct {
 	loading bool
 
 	// DNS lookup cache and state
-	dnsCache   map[string][]string // ip -> hostnames
-	dnsLookingUp string            // IP currently being looked up (empty = idle)
+	dnsCache     map[string][]string // ip -> hostnames
+	dnsLookingUp string              // IP currently being looked up (empty = idle)
+
+	// Bans
+	bans         []redis.Ban
+	bansCursor   int
+	bansOffset   int
+	detailBan    *redis.Ban
 }
 
 // New creates a new Model.
@@ -134,6 +142,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PollTickMsg:
 		return m, m.doPoll()
 
+	case BansLoadedMsg:
+		m.bans = msg.Bans
+		return m, nil
+
+	case BansPollTickMsg:
+		return m, m.doLoadBans()
+
 	case ErrMsg:
 		m.loading = false
 		m.lastErr = msg.Err
@@ -182,33 +197,26 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.currentView {
-	case viewList:
+	case viewReportsList:
 		return m.handleListKey(key)
-	case viewDetail:
+	case viewReportDetail:
 		if isEscape || key == "q" {
-			m.currentView = viewList
+			m.currentView = viewReportsList
 			m.detailReport = nil
 			m.detailOffset = 0
 			return m, nil
 		}
-		switch key {
-		case "up", "k":
-			if m.detailOffset > 0 {
-				m.detailOffset--
-			}
-		case "down", "j":
-			m.detailOffset++
-		case "pgup":
-			m.detailOffset -= m.height - 3
-			if m.detailOffset < 0 {
-				m.detailOffset = 0
-			}
-		case "pgdown":
-			m.detailOffset += m.height - 3
-		case "home":
+		return m.handleScrollKeys(key)
+	case viewBansList:
+		return m.handleBansListKey(key)
+	case viewBanDetail:
+		if isEscape || key == "q" {
+			m.currentView = viewBansList
+			m.detailBan = nil
 			m.detailOffset = 0
+			return m, nil
 		}
-		return m, nil
+		return m.handleScrollKeys(key)
 	}
 
 	return m, nil
@@ -280,7 +288,7 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		if m.cursor >= 0 && m.cursor < len(m.filteredIdx) {
 			idx := m.filteredIdx[m.cursor]
 			m.detailReport = &m.allReports[idx]
-			m.currentView = viewDetail
+			m.currentView = viewReportDetail
 			m.detailOffset = 0
 
 			// Trigger async DNS lookup if not cached
@@ -300,8 +308,85 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		m.refilter()
 		m.cursor = 0
 		m.offset = 0
+	case "2":
+		m.currentView = viewBansList
+		m.bansCursor = 0
+		m.bansOffset = 0
+		return m, m.doLoadBans()
 	}
 	return m, nil
+}
+
+func (m Model) handleBansListKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "q":
+		return m, tea.Quit
+	case "up", "k":
+		if m.bansCursor > 0 {
+			m.bansCursor--
+			if m.bansCursor < m.bansOffset {
+				m.bansOffset = m.bansCursor
+			}
+		}
+	case "down", "j":
+		if m.bansCursor < len(m.bans)-1 {
+			m.bansCursor++
+			dataRows := m.dataRows()
+			if m.bansCursor >= m.bansOffset+dataRows {
+				m.bansOffset = m.bansCursor - dataRows + 1
+			}
+		}
+	case "enter":
+		if m.bansCursor >= 0 && m.bansCursor < len(m.bans) {
+			m.detailBan = &m.bans[m.bansCursor]
+			m.currentView = viewBanDetail
+			m.detailOffset = 0
+			ip := m.detailBan.IP
+			if _, ok := m.dnsCache[ip]; !ok {
+				m.dnsLookingUp = ip
+				return m, func() tea.Msg {
+					names, err := net.LookupAddr(ip)
+					return DNSResultMsg{IP: ip, Names: names, Err: err}
+				}
+			}
+		}
+	case "r":
+		return m, m.doLoadBans()
+	case "1":
+		m.currentView = viewReportsList
+	}
+	return m, nil
+}
+
+func (m Model) handleScrollKeys(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.detailOffset > 0 {
+			m.detailOffset--
+		}
+	case "down", "j":
+		m.detailOffset++
+	case "pgup":
+		m.detailOffset -= m.height - 3
+		if m.detailOffset < 0 {
+			m.detailOffset = 0
+		}
+	case "pgdown":
+		m.detailOffset += m.height - 3
+	case "home":
+		m.detailOffset = 0
+	}
+	return m, nil
+}
+
+func (m Model) doLoadBans() tea.Cmd {
+	return func() tea.Msg {
+		bans, err := m.redisClient.LoadBans(context.Background())
+		if err != nil {
+			return ErrMsg{Err: err}
+		}
+		return BansLoadedMsg{Bans: bans}
+	}
 }
 
 func (m *Model) openFilter() {
@@ -451,13 +536,21 @@ func (m Model) View() tea.View {
 	var content string
 
 	switch m.currentView {
-	case viewList:
+	case viewReportsList:
 		content = RenderList(m.allReports, m.filteredIdx, m.cursor, m.offset, m.width, m.height, m.paused, &m.filter, m.totalReports, m.lastErr)
-	case viewDetail:
+	case viewReportDetail:
 		if m.detailReport != nil {
 			dnsNames := m.dnsCache[m.detailReport.IP]
 			dnsLoading := m.dnsLookingUp == m.detailReport.IP
 			content = RenderDetail(m.detailReport, m.width, m.height, m.detailOffset, dnsNames, dnsLoading)
+		}
+	case viewBansList:
+		content = RenderBansList(m.bans, m.bansCursor, m.bansOffset, m.width, m.height, m.lastErr)
+	case viewBanDetail:
+		if m.detailBan != nil {
+			dnsNames := m.dnsCache[m.detailBan.IP]
+			dnsLoading := m.dnsLookingUp == m.detailBan.IP
+			content = RenderBanDetail(m.detailBan, m.width, m.height, m.detailOffset, dnsNames, dnsLoading)
 		}
 	}
 

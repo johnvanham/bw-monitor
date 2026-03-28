@@ -103,7 +103,7 @@ func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, 
 	b.WriteString("\n")
 
 	// Help bar
-	help := "[Space] Pause/Resume  [Enter] Detail  [f] Filter  [c] Clear filter  [q] Quit"
+	help := "[1] Reports  [2] Bans  [Space] Pause/Resume  [Enter] Detail  [f] Filter  [c] Clear filter  [q] Quit"
 	b.WriteString(ui.HelpStyle.Render(help))
 
 	return b.String()
