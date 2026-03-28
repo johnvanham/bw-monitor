@@ -6,6 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
+	github.com/biter777/countries v1.7.5
 	github.com/mileusna/useragent v1.3.5
 	github.com/redis/go-redis/v9 v9.18.0
 	k8s.io/apimachinery v0.35.3

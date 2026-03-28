@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/biter777/countries"
 	useragent "github.com/mileusna/useragent"
 	"github.com/johnvanham/bw-monitor/internal/redis"
 	"github.com/johnvanham/bw-monitor/internal/ui"
@@ -35,7 +36,11 @@ func RenderDetail(r *redis.BlockReport, width, height, detailOffset int, dnsName
 		field("rDNS:", strings.Join(dnsNames, ", "))
 	}
 
-	field("Country:", r.Country)
+	if c := countries.ByName(r.Country); c != countries.Unknown {
+		field("Country:", fmt.Sprintf("%s (%s)", c.String(), r.Country))
+	} else {
+		field("Country:", r.Country)
+	}
 	field("Method:", r.Method)
 	field("URL:", r.URL)
 	field("Status:", fmt.Sprintf("%d", r.Status))

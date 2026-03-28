@@ -88,22 +88,25 @@ Filter fields:
 
 ## How It Works
 
-BW Monitor connects to the Kubernetes cluster using your current kubectl context, discovers the BunkerWeb Redis pod, and reads the `requests` list which contains JSON-encoded block reports. On startup it loads existing reports, then polls every 2 seconds for new entries.
+BW Monitor connects to the Kubernetes cluster using your current kubectl context, discovers the BunkerWeb Redis pod, and opens a port-forward to it. It then connects a native Redis client (go-redis) through the tunnel and reads the `requests` list which contains JSON-encoded block reports. On startup it loads existing reports, then polls every 2 seconds for new entries.
 
-The application communicates with Redis by executing `redis-cli` commands inside the pod via the Kubernetes exec API (SPDY), so no port-forwarding or direct network access to the ClusterIP is needed.
+The port-forward is managed automatically — no manual `kubectl port-forward` is needed. The persistent connection is significantly more efficient than per-request exec, as it avoids repeated SPDY/TLS handshakes.
 
 ## Architecture
 
 ```
 Kubernetes Cluster
-  └─ redis-bunkerweb pod
-       └─ redis-cli LRANGE requests ...
+  └─ redis-bunkerweb pod (:6379)
               │
-              │ exec via SPDY (client-go)
+              │ port-forward (client-go)
+              │
+         localhost:<port>
+              │
+              │ go-redis (native Redis protocol)
               ▼
          bw-monitor
-           ├─ internal/k8s/     Kubernetes client, pod discovery, exec
-           ├─ internal/redis/   Report parsing, polling with highwater mark
+           ├─ internal/k8s/     Kubernetes client, pod discovery, port-forward
+           ├─ internal/redis/   go-redis client, report parsing, polling
            ├─ internal/model/   Bubble Tea model, views, filter logic
            └─ internal/ui/      Styles, IP colour palette, formatting
 ```
