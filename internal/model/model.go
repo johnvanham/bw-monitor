@@ -120,7 +120,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.allReports = msg.Reports
 		m.totalReports = len(msg.Reports)
 		m.refilter()
-		m.scrollToBottom()
+		m.scrollToNewest()
 		return m, m.pollTick()
 
 	case NewReportsMsg:
@@ -132,7 +132,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.totalReports = len(m.allReports)
 				m.refilter()
 				if m.following {
-					m.scrollToBottom()
+					m.scrollToNewest()
 				}
 			}
 		}
@@ -235,12 +235,12 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			m.refilter()
 		}
 	case "up", "k":
-		m.following = false
 		if m.cursor > 0 {
 			m.cursor--
 			if m.cursor < m.offset {
 				m.offset = m.cursor
 			}
+			m.following = false
 		}
 	case "down", "j":
 		if m.cursor < len(m.filteredIdx)-1 {
@@ -249,19 +249,16 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			if m.cursor >= m.offset+dataRows {
 				m.offset = m.cursor - dataRows + 1
 			}
-		}
-		// Re-enable following if cursor is at the bottom
-		if m.cursor >= len(m.filteredIdx)-1 {
-			m.following = true
+			m.following = false
 		}
 	case "pgup":
-		m.following = false
 		dataRows := m.dataRows()
 		m.cursor -= dataRows
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
 		m.offset = m.cursor
+		m.following = false
 	case "pgdown":
 		dataRows := m.dataRows()
 		m.cursor += dataRows
@@ -274,16 +271,20 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		if m.cursor >= m.offset+dataRows {
 			m.offset = m.cursor - dataRows + 1
 		}
-		if m.cursor >= len(m.filteredIdx)-1 {
-			m.following = true
-		}
-	case "home":
 		m.following = false
-		m.cursor = 0
-		m.offset = 0
-	case "end":
+	case "home":
 		m.following = true
-		m.scrollToBottom()
+		m.scrollToNewest()
+	case "end":
+		m.cursor = len(m.filteredIdx) - 1
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		dataRows := m.dataRows()
+		if m.cursor >= dataRows {
+			m.offset = m.cursor - dataRows + 1
+		}
+		m.following = false
 	case "enter":
 		if m.cursor >= 0 && m.cursor < len(m.filteredIdx) {
 			idx := m.filteredIdx[m.cursor]
@@ -480,17 +481,10 @@ func (m *Model) dataRows() int {
 	return rows
 }
 
-func (m *Model) scrollToBottom() {
-	m.cursor = len(m.filteredIdx) - 1
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	dataRows := m.dataRows()
-	if m.cursor >= dataRows {
-		m.offset = m.cursor - dataRows + 1
-	} else {
-		m.offset = 0
-	}
+// scrollToNewest moves the cursor to the top of the list (newest entries).
+func (m *Model) scrollToNewest() {
+	m.cursor = 0
+	m.offset = 0
 }
 
 func (m *Model) refilter() {
