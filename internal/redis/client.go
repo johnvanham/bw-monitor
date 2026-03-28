@@ -4,46 +4,47 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 
-	"github.com/johnvanham/bw-monitor/internal/k8s"
+	goredis "github.com/redis/go-redis/v9"
 )
 
-// Client reads block reports from BunkerWeb's Redis instance via pod exec.
+// Client reads block reports from BunkerWeb's Redis instance.
 type Client struct {
-	k8s     *k8s.Client
-	podName string
+	rdb *goredis.Client
 	// highwater tracks the last known length of the requests list
-	highwater int
+	highwater int64
 }
 
-// NewClient creates a Redis client that communicates via kubectl exec.
-func NewClient(k8sClient *k8s.Client, podName string) *Client {
-	return &Client{
-		k8s:     k8sClient,
-		podName: podName,
-	}
+// NewClient creates a Redis client connected to the given address.
+func NewClient(addr string) *Client {
+	rdb := goredis.NewClient(&goredis.Options{
+		Addr: addr,
+	})
+	return &Client{rdb: rdb}
+}
+
+// Ping verifies the Redis connection.
+func (c *Client) Ping(ctx context.Context) error {
+	return c.rdb.Ping(ctx).Err()
+}
+
+// Close closes the Redis connection.
+func (c *Client) Close() error {
+	return c.rdb.Close()
 }
 
 // LoadInitial loads up to maxEntries reports from Redis.
 // Reports are returned newest-first (index 0 in Redis is newest).
 func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport, error) {
-	// Get list length
-	lenStr, err := c.k8s.ExecRedis(ctx, c.podName, "LLEN", "requests")
+	total, err := c.rdb.LLen(ctx, "requests").Result()
 	if err != nil {
 		return nil, fmt.Errorf("LLEN: %w", err)
 	}
-	total, err := strconv.Atoi(strings.TrimSpace(lenStr))
-	if err != nil {
-		return nil, fmt.Errorf("parsing LLEN result %q: %w", lenStr, err)
-	}
 
 	end := total - 1
-	start := 0
-	if maxEntries > 0 && total > maxEntries {
-		start = 0
-		end = maxEntries - 1
+	start := int64(0)
+	if maxEntries > 0 && total > int64(maxEntries) {
+		end = int64(maxEntries) - 1
 	}
 
 	reports, err := c.fetchRange(ctx, start, end)
@@ -51,26 +52,15 @@ func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport
 		return nil, err
 	}
 
-	// Set highwater to the number of entries we've seen
-	if maxEntries > 0 && total > maxEntries {
-		c.highwater = total
-	} else {
-		c.highwater = total
-	}
-
+	c.highwater = total
 	return reports, nil
 }
 
 // PollNew fetches any new reports added since the last poll.
-// Returns new reports (newest first) and any error.
 func (c *Client) PollNew(ctx context.Context) ([]BlockReport, error) {
-	lenStr, err := c.k8s.ExecRedis(ctx, c.podName, "LLEN", "requests")
+	total, err := c.rdb.LLen(ctx, "requests").Result()
 	if err != nil {
 		return nil, fmt.Errorf("LLEN: %w", err)
-	}
-	total, err := strconv.Atoi(strings.TrimSpace(lenStr))
-	if err != nil {
-		return nil, fmt.Errorf("parsing LLEN result: %w", err)
 	}
 
 	newCount := total - c.highwater
@@ -78,7 +68,6 @@ func (c *Client) PollNew(ctx context.Context) ([]BlockReport, error) {
 		return nil, nil
 	}
 
-	// New entries are prepended at index 0, so fetch 0 to newCount-1
 	reports, err := c.fetchRange(ctx, 0, newCount-1)
 	if err != nil {
 		return nil, err
@@ -88,29 +77,16 @@ func (c *Client) PollNew(ctx context.Context) ([]BlockReport, error) {
 	return reports, nil
 }
 
-func (c *Client) fetchRange(ctx context.Context, start, end int) ([]BlockReport, error) {
-	output, err := c.k8s.ExecRedis(ctx, c.podName,
-		"LRANGE", "requests", strconv.Itoa(start), strconv.Itoa(end))
+func (c *Client) fetchRange(ctx context.Context, start, end int64) ([]BlockReport, error) {
+	vals, err := c.rdb.LRange(ctx, "requests", start, end).Result()
 	if err != nil {
 		return nil, fmt.Errorf("LRANGE requests %d %d: %w", start, end, err)
 	}
 
-	return parseReports(output)
-}
-
-func parseReports(output string) ([]BlockReport, error) {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var reports []BlockReport
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
+	for _, val := range vals {
 		var report BlockReport
-		if err := json.Unmarshal([]byte(line), &report); err != nil {
-			// Skip unparseable lines
+		if err := json.Unmarshal([]byte(val), &report); err != nil {
 			continue
 		}
 		report.ParseData()
