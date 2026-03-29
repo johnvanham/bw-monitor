@@ -226,7 +226,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.excludeModalCursor < len(ips)-1 {
 				m.excludeModalCursor++
 			}
-		case "d", "delete", "backspace":
+		case "delete", "backspace":
 			ips := m.excludes.List()
 			if len(ips) > 0 && m.excludeModalCursor < len(ips) {
 				m.excludes.Remove(ips[m.excludeModalCursor])
@@ -761,7 +761,7 @@ func (m Model) renderExcludeModal() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(ui.HelpStyle.Render("  [d] Remove  [Esc] Close"))
+	b.WriteString(ui.HelpStyle.Render("  [Del] Remove  [Esc] Close"))
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
