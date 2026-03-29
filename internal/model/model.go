@@ -128,11 +128,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.paused {
 				m.pendingReports = append(msg.Reports, m.pendingReports...)
 			} else {
+				newCount := len(msg.Reports)
 				m.allReports = append(msg.Reports, m.allReports...)
 				m.totalReports = len(m.allReports)
 				m.refilter()
 				if m.following {
 					m.scrollToNewest()
+				} else {
+					// Shift cursor and offset down to stay on the same entry
+					m.cursor += newCount
+					m.offset += newCount
 				}
 			}
 		}
