@@ -11,10 +11,9 @@ import (
 	"github.com/johnvanham/bw-monitor/internal/ui"
 )
 
-// RenderDetail renders the detail view for a single report with scroll support.
-// detailOffset is the scroll position within the content.
-func RenderDetail(r *redis.BlockReport, width, height, detailOffset int, dnsNames []string, dnsLoading bool) string {
-	// Build all content lines first
+// BuildDetailContent builds the full content string for a report detail view.
+// This content is set on the detail viewport which handles scrolling natively.
+func BuildDetailContent(r *redis.BlockReport, width int, dnsNames []string, dnsLoading bool) string {
 	var lines []string
 
 	add := func(s string) {
@@ -111,43 +110,5 @@ func RenderDetail(r *redis.BlockReport, width, height, detailOffset int, dnsName
 		}
 	}
 
-	// Now render with scroll: title bar + scrollable content + help bar
-	var b strings.Builder
-	b.WriteString(RenderTitleBar("BW Monitor", "Block Detail", width))
-	b.WriteString("\n")
-
-	// Available rows for content (minus title bar and help bar)
-	contentRows := height - 3
-	if contentRows < 1 {
-		contentRows = 1
-	}
-
-	// Clamp offset
-	maxOffset := len(lines) - contentRows
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if detailOffset > maxOffset {
-		detailOffset = maxOffset
-	}
-
-	// Render visible lines
-	for i := 0; i < contentRows; i++ {
-		idx := detailOffset + i
-		if idx < len(lines) {
-			b.WriteString(lines[idx])
-		}
-		b.WriteString("\n")
-	}
-
-	// Scroll indicator
-	scrollInfo := ""
-	if len(lines) > contentRows {
-		scrollInfo = fmt.Sprintf("  Line %d/%d", detailOffset+1, len(lines))
-	}
-
-	help := ui.HelpStyle.Render("[Esc] Back" + scrollInfo + "  [Up/Down] Scroll")
-	b.WriteString(help)
-
-	return b.String()
+	return strings.Join(lines, "\n")
 }

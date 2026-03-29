@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/johnvanham/bw-monitor/internal/redis"
@@ -27,17 +29,24 @@ const pollInterval = 2 * time.Second
 // Model is the root bubbletea model.
 type Model struct {
 	// Data
-	allReports     []redis.BlockReport
-	filteredIdx    []int
-	redisClient    *redis.Client
-	totalReports   int
+	allReports   []redis.BlockReport
+	filteredIdx  []int
+	redisClient  *redis.Client
+	totalReports int
 
 	// View state
 	currentView  viewState
-	cursor       int
-	offset       int
 	detailReport *redis.BlockReport
-	detailOffset int // scroll position within detail view
+
+	// List viewports (content rendered manually, viewport just displays)
+	reportsViewport viewport.Model
+	reportsCursor   int
+
+	bansViewport viewport.Model
+	bansCursor   int
+
+	// Detail viewports (viewport handles scrolling natively)
+	detailViewport viewport.Model
 
 	// Filter modal
 	filterOpen   bool
@@ -64,15 +73,32 @@ type Model struct {
 	dnsLookingUp string              // IP currently being looked up (empty = idle)
 
 	// Bans
-	bans       []redis.Ban
-	bansCursor int
-	bansOffset int
-	detailBan  *redis.Ban
+	bans      []redis.Ban
+	detailBan *redis.Ban
 
 	// IP exclusions
-	excludes        *ExcludeList
-	excludeModalOpen bool
+	excludes           *ExcludeList
+	excludeModalOpen   bool
 	excludeModalCursor int
+}
+
+// detailKeyMap returns a KeyMap for detail viewports that only binds
+// arrow keys, j/k, pgup/pgdown — avoids conflicts with app keys like f, space, b.
+func detailKeyMap() viewport.KeyMap {
+	return viewport.KeyMap{
+		Up: key.NewBinding(key.WithKeys("up", "k")),
+		Down: key.NewBinding(key.WithKeys("down", "j")),
+		PageUp: key.NewBinding(key.WithKeys("pgup")),
+		PageDown: key.NewBinding(key.WithKeys("pgdown")),
+		HalfPageUp: key.NewBinding(key.WithKeys("ctrl+u")),
+		HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d")),
+	}
+}
+
+// emptyKeyMap returns a KeyMap with no bindings, used for list viewports
+// where we handle navigation manually.
+func emptyKeyMap() viewport.KeyMap {
+	return viewport.KeyMap{}
 }
 
 // New creates a new Model.
@@ -94,13 +120,27 @@ func New(redisClient *redis.Client, maxEntries int) Model {
 	dateToInput.Placeholder = "YYYY-MM-DD HH:MM"
 	dateToInput.SetWidth(30)
 
+	// Create list viewports with empty keymaps (we handle keys manually)
+	reportsVP := viewport.New()
+	reportsVP.KeyMap = emptyKeyMap()
+
+	bansVP := viewport.New()
+	bansVP.KeyMap = emptyKeyMap()
+
+	// Create detail viewport with custom keymap
+	detailVP := viewport.New()
+	detailVP.KeyMap = detailKeyMap()
+
 	return Model{
-		redisClient:  redisClient,
-		loading:      true,
-		following:    true,
-		filterInputs: []textinput.Model{ipInput, countryInput, dateFromInput, dateToInput},
-		dnsCache:     make(map[string][]string),
-		excludes:     NewExcludeList(),
+		redisClient:     redisClient,
+		loading:         true,
+		following:       true,
+		filterInputs:    []textinput.Model{ipInput, countryInput, dateFromInput, dateToInput},
+		dnsCache:        make(map[string][]string),
+		excludes:        NewExcludeList(),
+		reportsViewport: reportsVP,
+		bansViewport:    bansVP,
+		detailViewport:  detailVP,
 	}
 }
 
@@ -114,11 +154,41 @@ func (m Model) Init() tea.Cmd {
 	}
 }
 
+// dataRows returns the number of rows available for list data display.
+func (m *Model) dataRows() int {
+	rows := m.height - 4 // minus title bar, column header, status bar, help bar
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+func (m *Model) updateViewportSizes() {
+	dataRows := m.dataRows()
+
+	m.reportsViewport.SetWidth(m.width)
+	m.reportsViewport.SetHeight(dataRows)
+
+	m.bansViewport.SetWidth(m.width)
+	m.bansViewport.SetHeight(dataRows)
+
+	// Detail viewport: height minus title bar (1) and help bar (1)
+	detailHeight := m.height - 2
+	if detailHeight < 1 {
+		detailHeight = 1
+	}
+	m.detailViewport.SetWidth(m.width)
+	m.detailViewport.SetHeight(detailHeight)
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.updateViewportSizes()
+		m.rebuildReportsContent()
+		m.rebuildBansContent()
 		return m, nil
 
 	case InitialLoadMsg:
@@ -127,6 +197,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalReports = len(msg.Reports)
 		m.refilter()
 		m.scrollToNewest()
+		m.rebuildReportsContent()
 		return m, m.pollTick()
 
 	case NewReportsMsg:
@@ -141,25 +212,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.following {
 					m.scrollToNewest()
 				} else {
-					// Check if cursor was on the last entry before new data
-					wasAtEnd := m.cursor >= len(m.filteredIdx)-newCount-1
+					// Shift cursor down to stay on the same entry
+					wasAtEnd := m.reportsCursor >= len(m.filteredIdx)-newCount-1
 
-					// Shift cursor and offset down to stay on the same entry
-					m.cursor += newCount
-					m.offset += newCount
+					m.reportsCursor += newCount
 
-					// If was at last entry, stay at the new last entry
 					if wasAtEnd {
-						m.cursor = len(m.filteredIdx) - 1
-						if m.cursor < 0 {
-							m.cursor = 0
-						}
-						dataRows := m.dataRows()
-						if m.cursor >= m.offset+dataRows {
-							m.offset = m.cursor - dataRows + 1
+						m.reportsCursor = len(m.filteredIdx) - 1
+						if m.reportsCursor < 0 {
+							m.reportsCursor = 0
 						}
 					}
 				}
+				m.rebuildReportsContent()
+				m.syncReportsViewportOffset()
 			}
 		}
 		m.lastErr = nil
@@ -170,6 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case BansLoadedMsg:
 		m.bans = msg.Bans
+		m.rebuildBansContent()
 		return m, nil
 
 	case BansPollTickMsg:
@@ -187,6 +254,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dnsCache[msg.IP] = []string{"(no rDNS)"}
 		}
 		m.dnsLookingUp = ""
+		// Rebuild detail content if we're in a detail view
+		m.rebuildDetailContent()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -237,6 +306,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.excludeModalCursor = 0
 				}
 				m.refilter()
+				m.rebuildReportsContent()
 			}
 			if m.excludes.Count() == 0 {
 				m.excludeModalOpen = false
@@ -265,20 +335,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if isEscape || key == "q" {
 			m.currentView = viewReportsList
 			m.detailReport = nil
-			m.detailOffset = 0
 			return m, nil
 		}
-		return m.handleScrollKeys(key)
+		// Pass to detail viewport for native scrolling
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		return m, cmd
 	case viewBansList:
 		return m.handleBansListKey(key)
 	case viewBanDetail:
 		if isEscape || key == "q" {
 			m.currentView = viewBansList
 			m.detailBan = nil
-			m.detailOffset = 0
 			return m, nil
 		}
-		return m.handleScrollKeys(key)
+		// Pass to detail viewport for native scrolling
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -295,64 +369,63 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			m.pendingReports = nil
 			m.totalReports = len(m.allReports)
 			m.refilter()
+			m.rebuildReportsContent()
 		}
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-			if m.cursor < m.offset {
-				m.offset = m.cursor
-			}
+		if m.reportsCursor > 0 {
+			m.reportsCursor--
 			m.following = false
+			m.rebuildReportsContent()
+			m.syncReportsViewportOffset()
 		}
 	case "down", "j":
-		if m.cursor < len(m.filteredIdx)-1 {
-			m.cursor++
-			dataRows := m.dataRows()
-			if m.cursor >= m.offset+dataRows {
-				m.offset = m.cursor - dataRows + 1
-			}
+		if m.reportsCursor < len(m.filteredIdx)-1 {
+			m.reportsCursor++
 			m.following = false
+			m.rebuildReportsContent()
+			m.syncReportsViewportOffset()
 		}
 	case "pgup":
 		dataRows := m.dataRows()
-		m.cursor -= dataRows
-		if m.cursor < 0 {
-			m.cursor = 0
+		m.reportsCursor -= dataRows
+		if m.reportsCursor < 0 {
+			m.reportsCursor = 0
 		}
-		m.offset = m.cursor
 		m.following = false
+		m.rebuildReportsContent()
+		m.syncReportsViewportOffset()
 	case "pgdown":
 		dataRows := m.dataRows()
-		m.cursor += dataRows
-		if m.cursor >= len(m.filteredIdx) {
-			m.cursor = len(m.filteredIdx) - 1
+		m.reportsCursor += dataRows
+		if m.reportsCursor >= len(m.filteredIdx) {
+			m.reportsCursor = len(m.filteredIdx) - 1
 		}
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
-		if m.cursor >= m.offset+dataRows {
-			m.offset = m.cursor - dataRows + 1
+		if m.reportsCursor < 0 {
+			m.reportsCursor = 0
 		}
 		m.following = false
+		m.rebuildReportsContent()
+		m.syncReportsViewportOffset()
 	case "home":
 		m.following = true
 		m.scrollToNewest()
+		m.rebuildReportsContent()
+		m.reportsViewport.GotoTop()
 	case "end":
-		m.cursor = len(m.filteredIdx) - 1
-		if m.cursor < 0 {
-			m.cursor = 0
-		}
-		dataRows := m.dataRows()
-		if m.cursor >= dataRows {
-			m.offset = m.cursor - dataRows + 1
+		m.reportsCursor = len(m.filteredIdx) - 1
+		if m.reportsCursor < 0 {
+			m.reportsCursor = 0
 		}
 		m.following = false
+		m.rebuildReportsContent()
+		m.syncReportsViewportOffset()
 	case "enter":
-		if m.cursor >= 0 && m.cursor < len(m.filteredIdx) {
-			idx := m.filteredIdx[m.cursor]
+		if m.reportsCursor >= 0 && m.reportsCursor < len(m.filteredIdx) {
+			idx := m.filteredIdx[m.reportsCursor]
 			m.detailReport = &m.allReports[idx]
 			m.currentView = viewReportDetail
-			m.detailOffset = 0
+			m.rebuildDetailContent()
+			m.detailViewport.GotoTop()
 
 			// Trigger async DNS lookup if not cached
 			ip := m.detailReport.IP
@@ -369,21 +442,24 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	case "c":
 		m.filter.Clear()
 		m.refilter()
-		m.cursor = 0
-		m.offset = 0
+		m.reportsCursor = 0
+		m.rebuildReportsContent()
+		m.reportsViewport.GotoTop()
 	case "x":
 		// Exclude the IP of the currently selected report
-		if m.cursor >= 0 && m.cursor < len(m.filteredIdx) {
-			idx := m.filteredIdx[m.cursor]
+		if m.reportsCursor >= 0 && m.reportsCursor < len(m.filteredIdx) {
+			idx := m.filteredIdx[m.reportsCursor]
 			ip := m.allReports[idx].IP
 			m.excludes.Add(ip)
 			m.refilter()
-			if m.cursor >= len(m.filteredIdx) {
-				m.cursor = len(m.filteredIdx) - 1
+			if m.reportsCursor >= len(m.filteredIdx) {
+				m.reportsCursor = len(m.filteredIdx) - 1
 			}
-			if m.cursor < 0 {
-				m.cursor = 0
+			if m.reportsCursor < 0 {
+				m.reportsCursor = 0
 			}
+			m.rebuildReportsContent()
+			m.syncReportsViewportOffset()
 		}
 	case "X":
 		// Open exclude list modal
@@ -392,7 +468,8 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	case "2":
 		m.currentView = viewBansList
 		m.bansCursor = 0
-		m.bansOffset = 0
+		m.rebuildBansContent()
+		m.bansViewport.GotoTop()
 		return m, m.doLoadBans()
 	}
 	return m, nil
@@ -405,23 +482,40 @@ func (m Model) handleBansListKey(key string) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.bansCursor > 0 {
 			m.bansCursor--
-			if m.bansCursor < m.bansOffset {
-				m.bansOffset = m.bansCursor
-			}
+			m.rebuildBansContent()
+			m.syncBansViewportOffset()
 		}
 	case "down", "j":
 		if m.bansCursor < len(m.bans)-1 {
 			m.bansCursor++
-			dataRows := m.dataRows()
-			if m.bansCursor >= m.bansOffset+dataRows {
-				m.bansOffset = m.bansCursor - dataRows + 1
-			}
+			m.rebuildBansContent()
+			m.syncBansViewportOffset()
 		}
+	case "pgup":
+		dataRows := m.dataRows()
+		m.bansCursor -= dataRows
+		if m.bansCursor < 0 {
+			m.bansCursor = 0
+		}
+		m.rebuildBansContent()
+		m.syncBansViewportOffset()
+	case "pgdown":
+		dataRows := m.dataRows()
+		m.bansCursor += dataRows
+		if m.bansCursor >= len(m.bans) {
+			m.bansCursor = len(m.bans) - 1
+		}
+		if m.bansCursor < 0 {
+			m.bansCursor = 0
+		}
+		m.rebuildBansContent()
+		m.syncBansViewportOffset()
 	case "enter":
 		if m.bansCursor >= 0 && m.bansCursor < len(m.bans) {
 			m.detailBan = &m.bans[m.bansCursor]
 			m.currentView = viewBanDetail
-			m.detailOffset = 0
+			m.rebuildDetailContent()
+			m.detailViewport.GotoTop()
 			ip := m.detailBan.IP
 			if _, ok := m.dnsCache[ip]; !ok {
 				m.dnsLookingUp = ip
@@ -435,29 +529,38 @@ func (m Model) handleBansListKey(key string) (tea.Model, tea.Cmd) {
 		return m, m.doLoadBans()
 	case "1":
 		m.currentView = viewReportsList
+		m.rebuildReportsContent()
+		m.syncReportsViewportOffset()
 	}
 	return m, nil
 }
 
-func (m Model) handleScrollKeys(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "up", "k":
-		if m.detailOffset > 0 {
-			m.detailOffset--
-		}
-	case "down", "j":
-		m.detailOffset++
-	case "pgup":
-		m.detailOffset -= m.height - 3
-		if m.detailOffset < 0 {
-			m.detailOffset = 0
-		}
-	case "pgdown":
-		m.detailOffset += m.height - 3
-	case "home":
-		m.detailOffset = 0
+// syncReportsViewportOffset ensures the viewport offset keeps the cursor visible.
+func (m *Model) syncReportsViewportOffset() {
+	dataRows := m.dataRows()
+	offset := m.reportsViewport.YOffset()
+
+	if m.reportsCursor < offset {
+		offset = m.reportsCursor
+	} else if m.reportsCursor >= offset+dataRows {
+		offset = m.reportsCursor - dataRows + 1
 	}
-	return m, nil
+
+	m.reportsViewport.SetYOffset(offset)
+}
+
+// syncBansViewportOffset ensures the bans viewport offset keeps the cursor visible.
+func (m *Model) syncBansViewportOffset() {
+	dataRows := m.dataRows()
+	offset := m.bansViewport.YOffset()
+
+	if m.bansCursor < offset {
+		offset = m.bansCursor
+	} else if m.bansCursor >= offset+dataRows {
+		offset = m.bansCursor - dataRows + 1
+	}
+
+	m.bansViewport.SetYOffset(offset)
 }
 
 func (m Model) doLoadBans() tea.Cmd {
@@ -492,7 +595,7 @@ func (m Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	switch key {
-	case "escape":
+	case "escape", "esc":
 		m.filterOpen = false
 		m.filterInputs[m.filterFocus].Blur()
 		return m, nil
@@ -508,6 +611,8 @@ func (m Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		m.applyFilter()
+		m.rebuildReportsContent()
+		m.reportsViewport.GotoTop()
 		return m, nil
 	}
 
@@ -547,24 +652,14 @@ func (m *Model) applyFilter() {
 
 	m.filter.SetActive()
 	m.refilter()
-	m.cursor = 0
-	m.offset = 0
+	m.reportsCursor = 0
 	m.filterOpen = false
 	m.filterInputs[m.filterFocus].Blur()
 }
 
-func (m *Model) dataRows() int {
-	rows := m.height - 4 // minus title bar, column header, status bar, help bar
-	if rows < 1 {
-		return 1
-	}
-	return rows
-}
-
 // scrollToNewest moves the cursor to the top of the list (newest entries).
 func (m *Model) scrollToNewest() {
-	m.cursor = 0
-	m.offset = 0
+	m.reportsCursor = 0
 }
 
 func (m *Model) refilter() {
@@ -603,6 +698,26 @@ func (m Model) doPoll() tea.Cmd {
 	}
 }
 
+// rebuildDetailContent rebuilds the detail viewport content based on current view.
+func (m *Model) rebuildDetailContent() {
+	switch m.currentView {
+	case viewReportDetail:
+		if m.detailReport != nil {
+			dnsNames := m.dnsCache[m.detailReport.IP]
+			dnsLoading := m.dnsLookingUp == m.detailReport.IP
+			content := BuildDetailContent(m.detailReport, m.width, dnsNames, dnsLoading)
+			m.detailViewport.SetContent(content)
+		}
+	case viewBanDetail:
+		if m.detailBan != nil {
+			dnsNames := m.dnsCache[m.detailBan.IP]
+			dnsLoading := m.dnsLookingUp == m.detailBan.IP
+			content := BuildBanDetailContent(m.detailBan, m.width, dnsNames, dnsLoading)
+			m.detailViewport.SetContent(content)
+		}
+	}
+}
+
 func (m Model) View() tea.View {
 	if m.width == 0 {
 		v := tea.NewView("Initializing...")
@@ -620,84 +735,96 @@ func (m Model) View() tea.View {
 
 	switch m.currentView {
 	case viewReportsList:
-		content = RenderList(m.allReports, m.filteredIdx, m.cursor, m.offset, m.width, m.height, m.paused, &m.filter, m.totalReports, m.excludes.Count(), m.lastErr)
+		content = m.renderReportsListView()
 	case viewReportDetail:
-		if m.detailReport != nil {
-			dnsNames := m.dnsCache[m.detailReport.IP]
-			dnsLoading := m.dnsLookingUp == m.detailReport.IP
-			content = RenderDetail(m.detailReport, m.width, m.height, m.detailOffset, dnsNames, dnsLoading)
-		}
+		content = m.renderDetailView("Block Detail")
 	case viewBansList:
-		content = RenderBansList(m.bans, m.bansCursor, m.bansOffset, m.width, m.height, m.lastErr)
+		content = m.renderBansListView()
 	case viewBanDetail:
-		if m.detailBan != nil {
-			dnsNames := m.dnsCache[m.detailBan.IP]
-			dnsLoading := m.dnsLookingUp == m.detailBan.IP
-			content = RenderBanDetail(m.detailBan, m.width, m.height, m.detailOffset, dnsNames, dnsLoading)
-		}
+		content = m.renderDetailView("Ban Detail")
 	}
 
-	// Overlay filter modal if open
+	// Overlay modals using lipgloss.Place
 	if m.filterOpen {
-		modal := m.renderFilterModal()
-		modalHeight := 14
-		x := (m.width - 50) / 2
-		y := (m.height - modalHeight) / 2
-		if x < 0 {
-			x = 0
-		}
-		if y < 0 {
-			y = 0
-		}
-
-		lines := strings.Split(content, "\n")
-		modalLines := strings.Split(modal, "\n")
-		for i, ml := range modalLines {
-			row := y + i
-			if row < len(lines) {
-				if x+len(ml) < m.width {
-					padding := strings.Repeat(" ", x)
-					lines[row] = padding + ml
-				}
-			}
-		}
-		content = strings.Join(lines, "\n")
+		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderFilterModal())
 	}
-
-	// Overlay exclude modal if open
 	if m.excludeModalOpen {
-		modal := m.renderExcludeModal()
-		ips := m.excludes.List()
-		modalHeight := len(ips) + 8
-		if modalHeight > m.height-4 {
-			modalHeight = m.height - 4
-		}
-		x := (m.width - 50) / 2
-		y := (m.height - modalHeight) / 2
-		if x < 0 {
-			x = 0
-		}
-		if y < 0 {
-			y = 0
-		}
-
-		lines := strings.Split(content, "\n")
-		modalLines := strings.Split(modal, "\n")
-		for i, ml := range modalLines {
-			row := y + i
-			if row < len(lines) {
-				if x+len(ml) < m.width {
-					padding := strings.Repeat(" ", x)
-					lines[row] = padding + ml
-				}
-			}
-		}
-		content = strings.Join(lines, "\n")
+		content = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderExcludeModal())
 	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
+}
+
+// renderReportsListView renders the full reports list view with title, header, viewport, status, help.
+func (m Model) renderReportsListView() string {
+	var b strings.Builder
+
+	b.WriteString(RenderTitleBar("BW Monitor", "Live View", m.width))
+	b.WriteString("\n")
+
+	// Header row
+	header := ui.HeaderStyle.Render(ui.PadRight(ui.FormatHeaderRow(m.width), m.width))
+	b.WriteString(header)
+	b.WriteString("\n")
+
+	// Viewport content
+	b.WriteString(m.reportsViewport.View())
+	b.WriteString("\n")
+
+	// Status bar
+	b.WriteString(RenderReportsStatusBar(m.filteredIdx, m.totalReports, m.paused, &m.filter, m.excludes.Count(), m.lastErr, m.width))
+	b.WriteString("\n")
+
+	// Help bar
+	help := "[1] Reports  [2] Bans  [Space] Pause  [Enter] Detail  [f] Filter  [c] Clear  [x] Exclude IP  [X] Excludes  [q] Quit"
+	b.WriteString(ui.HelpStyle.Render(help))
+
+	return b.String()
+}
+
+// renderBansListView renders the full bans list view.
+func (m Model) renderBansListView() string {
+	var b strings.Builder
+
+	b.WriteString(RenderTitleBar("BW Monitor", "Active Bans", m.width))
+	b.WriteString("\n")
+
+	// Header
+	header := RenderBansHeader(m.width)
+	b.WriteString(ui.HeaderStyle.Render(ui.PadRight(header, m.width)))
+	b.WriteString("\n")
+
+	// Viewport content
+	b.WriteString(m.bansViewport.View())
+	b.WriteString("\n")
+
+	// Status bar
+	b.WriteString(RenderBansStatusBar(m.bans, m.lastErr, m.width))
+	b.WriteString("\n")
+
+	// Help bar
+	help := "[1] Reports  [2] Bans  [Enter] Detail  [r] Refresh  [q] Quit"
+	b.WriteString(ui.HelpStyle.Render(help))
+
+	return b.String()
+}
+
+// renderDetailView renders a detail view with title bar, viewport, and help bar.
+func (m Model) renderDetailView(contextLabel string) string {
+	var b strings.Builder
+
+	b.WriteString(RenderTitleBar("BW Monitor", contextLabel, m.width))
+	b.WriteString("\n")
+
+	b.WriteString(m.detailViewport.View())
+	b.WriteString("\n")
+
+	help := ui.HelpStyle.Render("[Esc] Back  [Up/Down] Scroll  [PgUp/PgDn] Page")
+	b.WriteString(help)
+
+	return b.String()
 }
 
 func (m Model) renderFilterModal() string {

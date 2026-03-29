@@ -36,50 +36,33 @@ func RenderTitleBar(appName, context string, width int) string {
 	return left + middle + right
 }
 
-// RenderList renders the list view with header, report rows, and status bar.
-func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, width, height int, paused bool, filter *Filter, totalReports, excludeCount int, lastErr error) string {
-	var b strings.Builder
-
-	// Title bar
-	b.WriteString(RenderTitleBar("BW Monitor", "Live View", width))
-	b.WriteString("\n")
-
-	// Header row
-	header := ui.HeaderStyle.Render(ui.PadRight(ui.FormatHeaderRow(width), width))
-	b.WriteString(header)
-	b.WriteString("\n")
-
-	// Available rows for data (minus title bar, header, status bar, help bar)
-	dataRows := height - 4
-	if dataRows < 1 {
-		dataRows = 1
+// rebuildReportsContent builds the content lines for the reports viewport
+// with cursor highlighting and IP colours baked in.
+func (m *Model) rebuildReportsContent() {
+	if m.width == 0 {
+		return
 	}
 
-	// Render visible rows
-	for i := 0; i < dataRows; i++ {
-		idx := offset + i
-		if idx >= len(filteredIdx) {
-			b.WriteString("\n")
-			continue
-		}
+	lines := make([]string, len(m.filteredIdx))
+	for i, fidx := range m.filteredIdx {
+		report := &m.allReports[fidx]
+		row := ui.FormatReportRow(report, m.width)
 
-		reportIdx := filteredIdx[idx]
-		report := &reports[reportIdx]
-		row := ui.FormatReportRow(report, width)
-
-		// Apply IP colour
 		ipColour := ui.ColourForIP(report.IP)
 		rowStyle := lipgloss.NewStyle().Foreground(ipColour)
 
-		if idx == cursor {
+		if i == m.reportsCursor {
 			rowStyle = rowStyle.Background(lipgloss.Color("#333333")).Bold(true)
 		}
 
-		b.WriteString(rowStyle.Render(ui.PadRight(row, width)))
-		b.WriteString("\n")
+		lines[i] = rowStyle.Render(ui.PadRight(row, m.width))
 	}
 
-	// Status bar
+	m.reportsViewport.SetContentLines(lines)
+}
+
+// RenderReportsStatusBar renders the status bar for the reports list view.
+func RenderReportsStatusBar(filteredIdx []int, totalReports int, paused bool, filter *Filter, excludeCount int, lastErr error, width int) string {
 	var statusParts []string
 
 	if paused {
@@ -102,13 +85,28 @@ func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, 
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
 	}
 
-	statusLine := ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
-	b.WriteString(statusLine)
-	b.WriteString("\n")
+	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
+}
 
-	// Help bar
-	help := "[1] Reports  [2] Bans  [Space] Pause  [Enter] Detail  [f] Filter  [c] Clear  [x] Exclude IP  [X] Excludes  [q] Quit"
-	b.WriteString(ui.HelpStyle.Render(help))
+// RenderBansHeader returns the column header string for the bans list.
+func RenderBansHeader(width int) string {
+	return fmt.Sprintf("%s %s %s %s %s %s %s",
+		ui.PadRight("IP", 16),
+		ui.PadRight("CC", 4),
+		ui.PadRight("Service", 30),
+		ui.PadRight("Reason", 14),
+		ui.PadRight("Banned At", 19),
+		ui.PadRight("Expires In", 12),
+		ui.PadRight("Events", 8),
+	)
+}
 
-	return b.String()
+// RenderBansStatusBar renders the status bar for the bans list view.
+func RenderBansStatusBar(bans []redis.Ban, lastErr error, width int) string {
+	var statusParts []string
+	statusParts = append(statusParts, fmt.Sprintf("%d active ban(s)", len(bans)))
+	if lastErr != nil {
+		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
+	}
+	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
 }
