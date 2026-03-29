@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -46,12 +47,13 @@ func (el *ExcludeList) Remove(ip string) {
 	el.save()
 }
 
-// List returns all excluded IPs sorted.
+// List returns all excluded IPs in a stable sorted order.
 func (el *ExcludeList) List() []string {
 	var ips []string
 	for ip := range el.ips {
 		ips = append(ips, ip)
 	}
+	sort.Strings(ips)
 	return ips
 }
 
