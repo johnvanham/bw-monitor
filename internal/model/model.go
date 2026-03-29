@@ -135,9 +135,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.following {
 					m.scrollToNewest()
 				} else {
+					// Check if cursor was on the last entry before new data
+					wasAtEnd := m.cursor >= len(m.filteredIdx)-newCount-1
+
 					// Shift cursor and offset down to stay on the same entry
 					m.cursor += newCount
 					m.offset += newCount
+
+					// If was at last entry, stay at the new last entry
+					if wasAtEnd {
+						m.cursor = len(m.filteredIdx) - 1
+						if m.cursor < 0 {
+							m.cursor = 0
+						}
+						dataRows := m.dataRows()
+						if m.cursor >= m.offset+dataRows {
+							m.offset = m.cursor - dataRows + 1
+						}
+					}
 				}
 			}
 		}
