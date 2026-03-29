@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -87,6 +88,11 @@ func (c *Client) LoadBans(ctx context.Context) ([]Ban, error) {
 		}
 		bans = append(bans, *ban)
 	}
+
+	// Sort newest ban first
+	sort.Slice(bans, func(i, j int) bool {
+		return bans[i].DateUnix > bans[j].DateUnix
+	})
 
 	return bans, nil
 }

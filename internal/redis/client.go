@@ -33,45 +33,53 @@ func (c *Client) Close() error {
 	return c.rdb.Close()
 }
 
-// LoadInitial loads up to maxEntries reports from Redis.
-// Reports are returned newest-first (index 0 in Redis is newest).
+// LoadInitial loads up to maxEntries of the most recent reports from Redis.
+// The Redis list is append-ordered: index 0 = oldest, index -1 = newest.
+// Reports are returned newest-first for display.
 func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport, error) {
 	total, err := c.rdb.LLen(ctx, "requests").Result()
 	if err != nil {
 		return nil, fmt.Errorf("LLEN: %w", err)
 	}
 
-	end := total - 1
-	start := int64(0)
-	if maxEntries > 0 && total > int64(maxEntries) {
-		end = int64(maxEntries) - 1
+	// Fetch the last maxEntries (newest) from the list
+	start := total - int64(maxEntries)
+	if start < 0 {
+		start = 0
 	}
 
-	reports, err := c.fetchRange(ctx, start, end)
+	reports, err := c.fetchRange(ctx, start, -1)
 	if err != nil {
 		return nil, err
 	}
+
+	// Reverse so newest is first
+	reverseReports(reports)
 
 	c.highwater = total
 	return reports, nil
 }
 
-// PollNew fetches any new reports added since the last poll.
+// PollNew fetches any new reports appended since the last poll.
+// Returns new reports newest-first.
 func (c *Client) PollNew(ctx context.Context) ([]BlockReport, error) {
 	total, err := c.rdb.LLen(ctx, "requests").Result()
 	if err != nil {
 		return nil, fmt.Errorf("LLEN: %w", err)
 	}
 
-	newCount := total - c.highwater
-	if newCount <= 0 {
+	if total <= c.highwater {
 		return nil, nil
 	}
 
-	reports, err := c.fetchRange(ctx, 0, newCount-1)
+	// Fetch entries from highwater to end (new entries appended at the end)
+	reports, err := c.fetchRange(ctx, c.highwater, -1)
 	if err != nil {
 		return nil, err
 	}
+
+	// Reverse so newest is first
+	reverseReports(reports)
 
 	c.highwater = total
 	return reports, nil
@@ -94,4 +102,10 @@ func (c *Client) fetchRange(ctx context.Context, start, end int64) ([]BlockRepor
 	}
 
 	return reports, nil
+}
+
+func reverseReports(reports []BlockReport) {
+	for i, j := 0, len(reports)-1; i < j; i, j = i+1, j-1 {
+		reports[i], reports[j] = reports[j], reports[i]
+	}
 }
