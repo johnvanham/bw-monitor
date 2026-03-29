@@ -37,7 +37,7 @@ func RenderTitleBar(appName, context string, width int) string {
 }
 
 // RenderList renders the list view with header, report rows, and status bar.
-func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, width, height int, paused bool, filter *Filter, totalReports int, lastErr error) string {
+func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, width, height int, paused bool, filter *Filter, totalReports, excludeCount int, lastErr error) string {
 	var b strings.Builder
 
 	// Title bar
@@ -94,6 +94,10 @@ func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, 
 		statusParts = append(statusParts, ui.FilterActiveStyle.Render("Filter: "+filter.Summary()))
 	}
 
+	if excludeCount > 0 {
+		statusParts = append(statusParts, ui.DimStyle.Render(fmt.Sprintf("%d IP(s) excluded", excludeCount)))
+	}
+
 	if lastErr != nil {
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
 	}
@@ -103,7 +107,7 @@ func RenderList(reports []redis.BlockReport, filteredIdx []int, cursor, offset, 
 	b.WriteString("\n")
 
 	// Help bar
-	help := "[1] Reports  [2] Bans  [Space] Pause/Resume  [Enter] Detail  [f] Filter  [c] Clear filter  [q] Quit"
+	help := "[1] Reports  [2] Bans  [Space] Pause  [Enter] Detail  [f] Filter  [c] Clear  [x] Exclude IP  [X] Excludes  [q] Quit"
 	b.WriteString(ui.HelpStyle.Render(help))
 
 	return b.String()

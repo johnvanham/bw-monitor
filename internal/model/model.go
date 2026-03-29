@@ -64,10 +64,15 @@ type Model struct {
 	dnsLookingUp string              // IP currently being looked up (empty = idle)
 
 	// Bans
-	bans         []redis.Ban
-	bansCursor   int
-	bansOffset   int
-	detailBan    *redis.Ban
+	bans       []redis.Ban
+	bansCursor int
+	bansOffset int
+	detailBan  *redis.Ban
+
+	// IP exclusions
+	excludes        *ExcludeList
+	excludeModalOpen bool
+	excludeModalCursor int
 }
 
 // New creates a new Model.
@@ -95,6 +100,7 @@ func New(redisClient *redis.Client, maxEntries int) Model {
 		following:    true,
 		filterInputs: []textinput.Model{ipInput, countryInput, dateFromInput, dateToInput},
 		dnsCache:     make(map[string][]string),
+		excludes:     NewExcludeList(),
 	}
 }
 
@@ -206,6 +212,42 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Escape key — check by code as well as string (bubbletea v2 may vary)
 	isEscape := key == "escape" || key == "esc" || msg.Code == tea.KeyEscape
 
+	// Exclude modal captures input when open
+	if m.excludeModalOpen {
+		switch key {
+		case "escape", "esc":
+			m.excludeModalOpen = false
+		case "up", "k":
+			if m.excludeModalCursor > 0 {
+				m.excludeModalCursor--
+			}
+		case "down", "j":
+			ips := m.excludes.List()
+			if m.excludeModalCursor < len(ips)-1 {
+				m.excludeModalCursor++
+			}
+		case "d", "delete", "backspace":
+			ips := m.excludes.List()
+			if len(ips) > 0 && m.excludeModalCursor < len(ips) {
+				m.excludes.Remove(ips[m.excludeModalCursor])
+				if m.excludeModalCursor >= len(m.excludes.List()) {
+					m.excludeModalCursor = len(m.excludes.List()) - 1
+				}
+				if m.excludeModalCursor < 0 {
+					m.excludeModalCursor = 0
+				}
+				m.refilter()
+			}
+			if m.excludes.Count() == 0 {
+				m.excludeModalOpen = false
+			}
+		}
+		if isEscape {
+			m.excludeModalOpen = false
+		}
+		return m, nil
+	}
+
 	// Filter modal captures all input when open
 	if m.filterOpen {
 		if isEscape {
@@ -246,7 +288,7 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q":
 		return m, tea.Quit
-	case " ":
+	case " ", "space":
 		m.paused = !m.paused
 		if !m.paused && len(m.pendingReports) > 0 {
 			m.allReports = append(m.pendingReports, m.allReports...)
@@ -329,6 +371,24 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		m.refilter()
 		m.cursor = 0
 		m.offset = 0
+	case "x":
+		// Exclude the IP of the currently selected report
+		if m.cursor >= 0 && m.cursor < len(m.filteredIdx) {
+			idx := m.filteredIdx[m.cursor]
+			ip := m.allReports[idx].IP
+			m.excludes.Add(ip)
+			m.refilter()
+			if m.cursor >= len(m.filteredIdx) {
+				m.cursor = len(m.filteredIdx) - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+		}
+	case "X":
+		// Open exclude list modal
+		m.excludeModalOpen = true
+		m.excludeModalCursor = 0
 	case "2":
 		m.currentView = viewBansList
 		m.bansCursor = 0
@@ -508,13 +568,22 @@ func (m *Model) scrollToNewest() {
 }
 
 func (m *Model) refilter() {
-	if !m.filter.IsActive() {
+	if !m.filter.IsActive() && m.excludes.Count() == 0 {
 		m.filteredIdx = make([]int, len(m.allReports))
 		for i := range m.allReports {
 			m.filteredIdx[i] = i
 		}
 	} else {
-		m.filteredIdx = m.filter.Apply(m.allReports)
+		m.filteredIdx = nil
+		for i := range m.allReports {
+			if m.excludes.Contains(m.allReports[i].IP) {
+				continue
+			}
+			if m.filter.IsActive() && !m.filter.Matches(&m.allReports[i]) {
+				continue
+			}
+			m.filteredIdx = append(m.filteredIdx, i)
+		}
 	}
 }
 
@@ -551,7 +620,7 @@ func (m Model) View() tea.View {
 
 	switch m.currentView {
 	case viewReportsList:
-		content = RenderList(m.allReports, m.filteredIdx, m.cursor, m.offset, m.width, m.height, m.paused, &m.filter, m.totalReports, m.lastErr)
+		content = RenderList(m.allReports, m.filteredIdx, m.cursor, m.offset, m.width, m.height, m.paused, &m.filter, m.totalReports, m.excludes.Count(), m.lastErr)
 	case viewReportDetail:
 		if m.detailReport != nil {
 			dnsNames := m.dnsCache[m.detailReport.IP]
@@ -572,6 +641,37 @@ func (m Model) View() tea.View {
 	if m.filterOpen {
 		modal := m.renderFilterModal()
 		modalHeight := 14
+		x := (m.width - 50) / 2
+		y := (m.height - modalHeight) / 2
+		if x < 0 {
+			x = 0
+		}
+		if y < 0 {
+			y = 0
+		}
+
+		lines := strings.Split(content, "\n")
+		modalLines := strings.Split(modal, "\n")
+		for i, ml := range modalLines {
+			row := y + i
+			if row < len(lines) {
+				if x+len(ml) < m.width {
+					padding := strings.Repeat(" ", x)
+					lines[row] = padding + ml
+				}
+			}
+		}
+		content = strings.Join(lines, "\n")
+	}
+
+	// Overlay exclude modal if open
+	if m.excludeModalOpen {
+		modal := m.renderExcludeModal()
+		ips := m.excludes.List()
+		modalHeight := len(ips) + 8
+		if modalHeight > m.height-4 {
+			modalHeight = m.height - 4
+		}
 		x := (m.width - 50) / 2
 		y := (m.height - modalHeight) / 2
 		if x < 0 {
@@ -623,6 +723,45 @@ func (m Model) renderFilterModal() string {
 
 	b.WriteString("\n")
 	b.WriteString(ui.HelpStyle.Render("  [Tab] Next field  [Enter] Apply  [Esc] Cancel"))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#569CD6")).
+		Padding(1, 2).
+		Width(46).
+		Render(b.String())
+}
+
+func (m Model) renderExcludeModal() string {
+	var b strings.Builder
+
+	b.WriteString(ui.TitleStyle.Render("  Excluded IPs"))
+	b.WriteString("\n\n")
+
+	ips := m.excludes.List()
+
+	if len(ips) == 0 {
+		b.WriteString(ui.DimStyle.Render("  No excluded IPs"))
+		b.WriteString("\n")
+	} else {
+		for i, ip := range ips {
+			prefix := "  "
+			if i == m.excludeModalCursor {
+				prefix = "> "
+			}
+			ipColour := ui.ColourForIP(ip)
+			style := lipgloss.NewStyle().Foreground(ipColour)
+			if i == m.excludeModalCursor {
+				style = style.Bold(true).Background(lipgloss.Color("#333333"))
+			}
+			b.WriteString(prefix)
+			b.WriteString(style.Render(ui.PadRight(ip, 40)))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(ui.HelpStyle.Render("  [d] Remove  [Esc] Close"))
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

@@ -26,14 +26,15 @@ func (f *Filter) IsActive() bool {
 func (f *Filter) Apply(reports []redis.BlockReport) []int {
 	var indices []int
 	for i := range reports {
-		if f.matches(&reports[i]) {
+		if f.Matches(&reports[i]) {
 			indices = append(indices, i)
 		}
 	}
 	return indices
 }
 
-func (f *Filter) matches(r *redis.BlockReport) bool {
+// Matches returns true if the report passes the filter criteria.
+func (f *Filter) Matches(r *redis.BlockReport) bool {
 	if f.IP != "" && !strings.Contains(r.IP, f.IP) {
 		return false
 	}
