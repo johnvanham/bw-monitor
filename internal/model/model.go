@@ -657,9 +657,11 @@ func (m *Model) applyFilter() {
 	m.filterInputs[m.filterFocus].Blur()
 }
 
-// scrollToNewest moves the cursor to the top of the list (newest entries).
+// scrollToNewest moves the cursor to the top of the list (newest entries)
+// and resets the viewport to show the top.
 func (m *Model) scrollToNewest() {
 	m.reportsCursor = 0
+	m.reportsViewport.GotoTop()
 }
 
 func (m *Model) refilter() {
