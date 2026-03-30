@@ -205,17 +205,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.paused {
 				m.pendingReports = append(msg.Reports, m.pendingReports...)
 			} else {
-				newCount := len(msg.Reports)
+				oldFilteredLen := len(m.filteredIdx)
 				m.allReports = append(msg.Reports, m.allReports...)
 				m.totalReports = len(m.allReports)
 				m.refilter()
+				newVisibleCount := len(m.filteredIdx) - oldFilteredLen
 				if m.following {
 					m.scrollToNewest()
-				} else {
-					// Shift cursor down to stay on the same entry
-					wasAtEnd := m.reportsCursor >= len(m.filteredIdx)-newCount-1
+				} else if newVisibleCount > 0 {
+					// Shift cursor down by the number of new *visible* entries
+					wasAtEnd := m.reportsCursor >= oldFilteredLen-1
 
-					m.reportsCursor += newCount
+					m.reportsCursor += newVisibleCount
 
 					if wasAtEnd {
 						m.reportsCursor = len(m.filteredIdx) - 1
