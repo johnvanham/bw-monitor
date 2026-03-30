@@ -52,8 +52,9 @@ func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport
 		}
 	}
 
-	// Load in batches of 500 to avoid port-forward buffer issues
-	const batchSize int64 = 500
+	// Load in batches to avoid overwhelming the port-forward SPDY tunnel.
+	// Each JSON entry is ~500 bytes, so 200 entries ≈ 100KB per batch.
+	const batchSize int64 = 200
 	var allReports []BlockReport
 	end := total - 1
 
@@ -65,6 +66,10 @@ func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport
 
 		batch, err := c.fetchRange(ctx, pos, batchEnd)
 		if err != nil {
+			if len(allReports) > 0 {
+				// Partial load is better than no data — return what we have
+				break
+			}
 			return nil, fmt.Errorf("loading batch %d-%d: %w", pos, batchEnd, err)
 		}
 		allReports = append(allReports, batch...)
