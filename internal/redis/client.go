@@ -37,13 +37,13 @@ func (c *Client) Close() error {
 // If maxEntries <= 0, all entries are loaded.
 // The Redis list is append-ordered: index 0 = oldest, index -1 = newest.
 // Reports are returned newest-first for display.
+// Loads in batches to avoid overwhelming the port-forward connection.
 func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport, error) {
 	total, err := c.rdb.LLen(ctx, "requests").Result()
 	if err != nil {
 		return nil, fmt.Errorf("LLEN: %w", err)
 	}
 
-	// Fetch the last maxEntries (newest) from the list, or all if <= 0
 	var start int64
 	if maxEntries > 0 {
 		start = total - int64(maxEntries)
@@ -52,16 +52,29 @@ func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport
 		}
 	}
 
-	reports, err := c.fetchRange(ctx, start, -1)
-	if err != nil {
-		return nil, err
+	// Load in batches of 500 to avoid port-forward buffer issues
+	const batchSize int64 = 500
+	var allReports []BlockReport
+	end := total - 1
+
+	for pos := start; pos <= end; pos += batchSize {
+		batchEnd := pos + batchSize - 1
+		if batchEnd > end {
+			batchEnd = end
+		}
+
+		batch, err := c.fetchRange(ctx, pos, batchEnd)
+		if err != nil {
+			return nil, fmt.Errorf("loading batch %d-%d: %w", pos, batchEnd, err)
+		}
+		allReports = append(allReports, batch...)
 	}
 
 	// Reverse so newest is first
-	reverseReports(reports)
+	reverseReports(allReports)
 
 	c.highwater = total
-	return reports, nil
+	return allReports, nil
 }
 
 // PollNew fetches any new reports appended since the last poll.
