@@ -42,12 +42,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to start port-forward: %v\n", err)
 		os.Exit(1)
 	}
-	defer pf.Close()
 
 	// Connect to Redis via port-forward
 	addr := fmt.Sprintf("127.0.0.1:%d", pf.LocalPort)
 	redisClient := redis.NewClient(addr)
-	defer redisClient.Close()
 
 	if err := redisClient.Ping(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to ping Redis: %v\n", err)
@@ -56,8 +54,12 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "Connected to Redis via port-forward (localhost:%d)\n", pf.LocalPort)
 
+	// Create reconnector for automatic recovery
+	reconnector := redis.NewReconnector(k8sClient, redisPod, pf, redisClient)
+	defer reconnector.Close()
+
 	// Create and run TUI
-	m := model.New(redisClient, *maxEntries)
+	m := model.New(redisClient, reconnector, *maxEntries)
 	p := tea.NewProgram(m)
 
 	if _, err := p.Run(); err != nil {

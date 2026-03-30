@@ -36,3 +36,11 @@ type BansLoadedMsg struct {
 
 // BansPollTickMsg triggers a bans refresh.
 type BansPollTickMsg struct{}
+
+// ReconnectedMsg signals that the Redis connection was re-established.
+type ReconnectedMsg struct{}
+
+// ReconnectFailedMsg signals that reconnection failed.
+type ReconnectFailedMsg struct {
+	Err error
+}

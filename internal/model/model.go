@@ -32,6 +32,7 @@ type Model struct {
 	allReports   []redis.BlockReport
 	filteredIdx  []int
 	redisClient  *redis.Client
+	reconnector  *redis.Reconnector
 	totalReports int
 
 	// View state
@@ -103,7 +104,7 @@ func emptyKeyMap() viewport.KeyMap {
 }
 
 // New creates a new Model.
-func New(redisClient *redis.Client, maxEntries int) Model {
+func New(redisClient *redis.Client, reconnector *redis.Reconnector, maxEntries int) Model {
 	// Create filter inputs
 	ipInput := textinput.New()
 	ipInput.Placeholder = "e.g. 192.168.1"
@@ -134,6 +135,7 @@ func New(redisClient *redis.Client, maxEntries int) Model {
 
 	return Model{
 		redisClient:     redisClient,
+		reconnector:     reconnector,
 		loading:         true,
 		following:       true,
 		maxEntries:      maxEntries,
@@ -247,6 +249,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ErrMsg:
 		m.loading = false
+		m.lastErr = msg.Err
+		// Attempt reconnection on error
+		if m.reconnector != nil {
+			return m, func() tea.Msg {
+				if err := m.reconnector.Reconnect(); err != nil {
+					return ReconnectFailedMsg{Err: err}
+				}
+				return ReconnectedMsg{}
+			}
+		}
+		return m, m.pollTick()
+
+	case ReconnectedMsg:
+		m.redisClient = m.reconnector.Client()
+		m.lastErr = nil
+		return m, m.pollTick()
+
+	case ReconnectFailedMsg:
 		m.lastErr = msg.Err
 		return m, m.pollTick()
 
