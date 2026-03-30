@@ -114,6 +114,10 @@ func New(redisClient *redis.Client, reconnector *redis.Reconnector, maxEntries i
 	countryInput.Placeholder = "e.g. GB"
 	countryInput.SetWidth(30)
 
+	serverInput := textinput.New()
+	serverInput.Placeholder = "e.g. www.ter-europe.org"
+	serverInput.SetWidth(30)
+
 	dateFromInput := textinput.New()
 	dateFromInput.Placeholder = "YYYY-MM-DD HH:MM"
 	dateFromInput.SetWidth(30)
@@ -139,7 +143,7 @@ func New(redisClient *redis.Client, reconnector *redis.Reconnector, maxEntries i
 		loading:         true,
 		following:       true,
 		maxEntries:      maxEntries,
-		filterInputs:    []textinput.Model{ipInput, countryInput, dateFromInput, dateToInput},
+		filterInputs:    []textinput.Model{ipInput, countryInput, serverInput, dateFromInput, dateToInput},
 		dnsCache:        make(map[string][]string),
 		excludes:        NewExcludeList(),
 		reportsViewport: reportsVP,
@@ -601,15 +605,16 @@ func (m *Model) openFilter() {
 	m.filterFocus = 0
 	m.filterInputs[0].SetValue(m.filter.IP)
 	m.filterInputs[1].SetValue(m.filter.Country)
+	m.filterInputs[2].SetValue(m.filter.Server)
 	if !m.filter.DateFrom.IsZero() {
-		m.filterInputs[2].SetValue(m.filter.DateFrom.Format("2006-01-02 15:04"))
-	} else {
-		m.filterInputs[2].SetValue("")
-	}
-	if !m.filter.DateTo.IsZero() {
-		m.filterInputs[3].SetValue(m.filter.DateTo.Format("2006-01-02 15:04"))
+		m.filterInputs[3].SetValue(m.filter.DateFrom.Format("2006-01-02 15:04"))
 	} else {
 		m.filterInputs[3].SetValue("")
+	}
+	if !m.filter.DateTo.IsZero() {
+		m.filterInputs[4].SetValue(m.filter.DateTo.Format("2006-01-02 15:04"))
+	} else {
+		m.filterInputs[4].SetValue("")
 	}
 	m.filterInputs[m.filterFocus].Focus()
 }
@@ -656,8 +661,9 @@ func (m Model) updateFilterInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) applyFilter() {
 	m.filter.IP = strings.TrimSpace(m.filterInputs[0].Value())
 	m.filter.Country = strings.TrimSpace(m.filterInputs[1].Value())
+	m.filter.Server = strings.TrimSpace(m.filterInputs[2].Value())
 
-	if v := strings.TrimSpace(m.filterInputs[2].Value()); v != "" {
+	if v := strings.TrimSpace(m.filterInputs[3].Value()); v != "" {
 		if t, err := time.Parse("2006-01-02 15:04", v); err == nil {
 			m.filter.DateFrom = t
 		}
@@ -665,7 +671,7 @@ func (m *Model) applyFilter() {
 		m.filter.DateFrom = time.Time{}
 	}
 
-	if v := strings.TrimSpace(m.filterInputs[3].Value()); v != "" {
+	if v := strings.TrimSpace(m.filterInputs[4].Value()); v != "" {
 		if t, err := time.Parse("2006-01-02 15:04", v); err == nil {
 			m.filter.DateTo = t
 		}
@@ -855,7 +861,7 @@ func (m Model) renderDetailView(contextLabel string) string {
 func (m Model) renderFilterModal() string {
 	var b strings.Builder
 
-	labels := []string{"IP:", "Country:", "From:", "To:"}
+	labels := []string{"IP:", "Country:", "Server:", "From:", "To:"}
 
 	b.WriteString(ui.TitleStyle.Render("  Filter Reports"))
 	b.WriteString("\n\n")

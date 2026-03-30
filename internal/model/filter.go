@@ -11,6 +11,7 @@ import (
 type Filter struct {
 	IP        string
 	Country   string
+	Server    string
 	DateFrom  time.Time
 	DateTo    time.Time
 	active    bool
@@ -41,6 +42,9 @@ func (f *Filter) Matches(r *redis.BlockReport) bool {
 	if f.Country != "" && !strings.EqualFold(r.Country, f.Country) {
 		return false
 	}
+	if f.Server != "" && !strings.Contains(strings.ToLower(r.ServerName), strings.ToLower(f.Server)) {
+		return false
+	}
 	if !f.DateFrom.IsZero() && r.Time().Before(f.DateFrom) {
 		return false
 	}
@@ -62,6 +66,9 @@ func (f *Filter) Summary() string {
 	if f.Country != "" {
 		parts = append(parts, "CC:"+f.Country)
 	}
+	if f.Server != "" {
+		parts = append(parts, "Server:"+f.Server)
+	}
 	if !f.DateFrom.IsZero() {
 		parts = append(parts, "From:"+f.DateFrom.Format("2006-01-02 15:04"))
 	}
@@ -78,6 +85,7 @@ func (f *Filter) Summary() string {
 func (f *Filter) Clear() {
 	f.IP = ""
 	f.Country = ""
+	f.Server = ""
 	f.DateFrom = time.Time{}
 	f.DateTo = time.Time{}
 	f.active = false
@@ -85,5 +93,5 @@ func (f *Filter) Clear() {
 
 // SetActive marks the filter as active.
 func (f *Filter) SetActive() {
-	f.active = f.IP != "" || f.Country != "" || !f.DateFrom.IsZero() || !f.DateTo.IsZero()
+	f.active = f.IP != "" || f.Country != "" || f.Server != "" || !f.DateFrom.IsZero() || !f.DateTo.IsZero()
 }
