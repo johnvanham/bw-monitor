@@ -33,7 +33,8 @@ func (c *Client) Close() error {
 	return c.rdb.Close()
 }
 
-// LoadInitial loads up to maxEntries of the most recent reports from Redis.
+// LoadInitial loads the most recent reports from Redis.
+// If maxEntries <= 0, all entries are loaded.
 // The Redis list is append-ordered: index 0 = oldest, index -1 = newest.
 // Reports are returned newest-first for display.
 func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport, error) {
@@ -42,10 +43,13 @@ func (c *Client) LoadInitial(ctx context.Context, maxEntries int) ([]BlockReport
 		return nil, fmt.Errorf("LLEN: %w", err)
 	}
 
-	// Fetch the last maxEntries (newest) from the list
-	start := total - int64(maxEntries)
-	if start < 0 {
-		start = 0
+	// Fetch the last maxEntries (newest) from the list, or all if <= 0
+	var start int64
+	if maxEntries > 0 {
+		start = total - int64(maxEntries)
+		if start < 0 {
+			start = 0
+		}
 	}
 
 	reports, err := c.fetchRange(ctx, start, -1)

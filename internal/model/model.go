@@ -66,7 +66,8 @@ type Model struct {
 	lastErr error
 
 	// Loading
-	loading bool
+	loading    bool
+	maxEntries int
 
 	// DNS lookup cache and state
 	dnsCache     map[string][]string // ip -> hostnames
@@ -135,6 +136,7 @@ func New(redisClient *redis.Client, maxEntries int) Model {
 		redisClient:     redisClient,
 		loading:         true,
 		following:       true,
+		maxEntries:      maxEntries,
 		filterInputs:    []textinput.Model{ipInput, countryInput, dateFromInput, dateToInput},
 		dnsCache:        make(map[string][]string),
 		excludes:        NewExcludeList(),
@@ -146,7 +148,7 @@ func New(redisClient *redis.Client, maxEntries int) Model {
 
 func (m Model) Init() tea.Cmd {
 	return func() tea.Msg {
-		reports, err := m.redisClient.LoadInitial(context.Background(), 1000)
+		reports, err := m.redisClient.LoadInitial(context.Background(), m.maxEntries)
 		if err != nil {
 			return ErrMsg{Err: err}
 		}

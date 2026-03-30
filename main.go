@@ -14,7 +14,7 @@ import (
 
 func main() {
 	namespace := flag.String("namespace", "bunkerweb", "Kubernetes namespace for BunkerWeb")
-	maxEntries := flag.Int("max-entries", 1000, "Maximum number of initial reports to load")
+	maxEntries := flag.Int("max-entries", 0, "Maximum number of initial reports to load (0 = all)")
 	flag.Parse()
 
 	ctx := context.Background()
