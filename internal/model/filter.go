@@ -39,8 +39,18 @@ func (f *Filter) Matches(r *redis.BlockReport) bool {
 	if f.IP != "" && !strings.Contains(r.IP, f.IP) {
 		return false
 	}
-	if f.Country != "" && !strings.EqualFold(r.Country, f.Country) {
-		return false
+	if f.Country != "" {
+		countries := strings.Split(f.Country, ",")
+		matched := false
+		for _, c := range countries {
+			if strings.EqualFold(strings.TrimSpace(c), r.Country) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	if f.Server != "" && !strings.Contains(strings.ToLower(r.ServerName), strings.ToLower(f.Server)) {
 		return false

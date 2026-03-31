@@ -111,7 +111,7 @@ func New(redisClient *redis.Client, reconnector *redis.Reconnector, maxEntries i
 	ipInput.SetWidth(50)
 
 	countryInput := textinput.New()
-	countryInput.Placeholder = "e.g. GB"
+	countryInput.Placeholder = "e.g. GB or GB,IN,US"
 	countryInput.SetWidth(50)
 
 	serverInput := textinput.New()
