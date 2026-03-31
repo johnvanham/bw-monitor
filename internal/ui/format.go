@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	useragent "github.com/mileusna/useragent"
 	"github.com/johnvanham/bw-monitor/internal/redis"
 )
 
@@ -17,7 +18,6 @@ const (
 	ColStatus     = 6
 	ColReason     = 14
 	ColServerName = 28
-	ColURL        = 0 // fills remaining space
 )
 
 // FormatTime formats a unix timestamp for display.
@@ -46,8 +46,8 @@ func PadRight(s string, width int) string {
 
 // FormatHeaderRow returns the column header string.
 func FormatHeaderRow(totalWidth int) string {
-	urlWidth := calcURLWidth(totalWidth)
-	return fmt.Sprintf("%s %s %s %s %s %s %s %s",
+	urlWidth, uaWidth := calcFlexWidths(totalWidth)
+	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
 		PadRight("Time", ColTime),
 		PadRight("IP", ColIP),
 		PadRight("CC", ColCountry),
@@ -56,13 +56,14 @@ func FormatHeaderRow(totalWidth int) string {
 		PadRight("Reason", ColReason),
 		PadRight("Server", ColServerName),
 		PadRight("URL", urlWidth),
+		PadRight("User Agent", uaWidth),
 	)
 }
 
 // FormatReportRow formats a single report as a table row.
 func FormatReportRow(r *redis.BlockReport, totalWidth int) string {
-	urlWidth := calcURLWidth(totalWidth)
-	return fmt.Sprintf("%s %s %s %s %s %s %s %s",
+	urlWidth, uaWidth := calcFlexWidths(totalWidth)
+	return fmt.Sprintf("%s %s %s %s %s %s %s %s %s",
 		PadRight(FormatTime(r.Time()), ColTime),
 		PadRight(r.IP, ColIP),
 		PadRight(r.Country, ColCountry),
@@ -71,14 +72,50 @@ func FormatReportRow(r *redis.BlockReport, totalWidth int) string {
 		PadRight(Truncate(r.Reason, ColReason), ColReason),
 		PadRight(Truncate(r.ServerName, ColServerName), ColServerName),
 		PadRight(Truncate(r.URL, urlWidth), urlWidth),
+		PadRight(Truncate(ParsedUA(r.UserAgent), uaWidth), uaWidth),
 	)
 }
 
-func calcURLWidth(totalWidth int) int {
-	used := ColTime + ColIP + ColCountry + ColMethod + ColStatus + ColReason + ColServerName + 7 // 7 spaces between columns
-	remaining := totalWidth - used
-	if remaining < 10 {
-		remaining = 10
+// ParsedUA returns a short summary of the parsed user agent string.
+func ParsedUA(raw string) string {
+	if raw == "" || raw == "-" {
+		return "-"
 	}
-	return remaining
+	ua := useragent.Parse(raw)
+	var parts []string
+	if ua.Name != "" {
+		v := ua.Name
+		if ua.Version != "" {
+			v += " " + ua.Version
+		}
+		parts = append(parts, v)
+	}
+	if ua.OS != "" {
+		parts = append(parts, ua.OS)
+	}
+	if ua.Bot {
+		parts = append(parts, "Bot")
+	} else if ua.Mobile {
+		parts = append(parts, "Mobile")
+	} else if ua.Tablet {
+		parts = append(parts, "Tablet")
+	} else if ua.Desktop {
+		parts = append(parts, "Desktop")
+	}
+	if len(parts) == 0 {
+		return Truncate(raw, 30)
+	}
+	return strings.Join(parts, " / ")
+}
+
+func calcFlexWidths(totalWidth int) (urlWidth, uaWidth int) {
+	fixedCols := ColTime + ColIP + ColCountry + ColMethod + ColStatus + ColReason + ColServerName + 8 // 8 spaces between 9 columns
+	remaining := totalWidth - fixedCols
+	if remaining < 20 {
+		remaining = 20
+	}
+	// Give 60% to URL, 40% to UA
+	urlWidth = remaining * 60 / 100
+	uaWidth = remaining - urlWidth
+	return
 }
