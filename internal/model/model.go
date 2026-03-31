@@ -108,23 +108,23 @@ func New(redisClient *redis.Client, reconnector *redis.Reconnector, maxEntries i
 	// Create filter inputs
 	ipInput := textinput.New()
 	ipInput.Placeholder = "e.g. 192.168.1"
-	ipInput.SetWidth(30)
+	ipInput.SetWidth(50)
 
 	countryInput := textinput.New()
 	countryInput.Placeholder = "e.g. GB"
-	countryInput.SetWidth(30)
+	countryInput.SetWidth(50)
 
 	serverInput := textinput.New()
 	serverInput.Placeholder = "e.g. www.ter-europe.org"
-	serverInput.SetWidth(30)
+	serverInput.SetWidth(50)
 
 	dateFromInput := textinput.New()
 	dateFromInput.Placeholder = "YYYY-MM-DD HH:MM"
-	dateFromInput.SetWidth(30)
+	dateFromInput.SetWidth(50)
 
 	dateToInput := textinput.New()
 	dateToInput.Placeholder = "YYYY-MM-DD HH:MM"
-	dateToInput.SetWidth(30)
+	dateToInput.SetWidth(50)
 
 	// Create list viewports with empty keymaps (we handle keys manually)
 	reportsVP := viewport.New()
@@ -886,7 +886,7 @@ func (m Model) renderFilterModal() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#569CD6")).
 		Padding(1, 2).
-		Width(46).
+		Width(66).
 		Render(b.String())
 }
 
@@ -925,6 +925,6 @@ func (m Model) renderExcludeModal() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#569CD6")).
 		Padding(1, 2).
-		Width(46).
+		Width(66).
 		Render(b.String())
 }
