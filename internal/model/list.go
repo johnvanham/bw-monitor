@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/johnvanham/bw-monitor/internal/redis"
 	"github.com/johnvanham/bw-monitor/internal/ui"
 )
 
@@ -85,7 +84,7 @@ func RenderReportsStatusBar(filteredIdx []int, totalReports int, paused bool, fi
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
 	}
 
-	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
+	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, " / "), width))
 }
 
 // RenderBansHeader returns the column header string for the bans list.
@@ -102,11 +101,17 @@ func RenderBansHeader(width int) string {
 }
 
 // RenderBansStatusBar renders the status bar for the bans list view.
-func RenderBansStatusBar(bans []redis.Ban, lastErr error, width int) string {
+func RenderBansStatusBar(filteredCount, totalCount, excludeCount int, filter *Filter, lastErr error, width int) string {
 	var statusParts []string
-	statusParts = append(statusParts, fmt.Sprintf("%d active ban(s)", len(bans)))
+	statusParts = append(statusParts, fmt.Sprintf("Showing %d/%d ban(s)", filteredCount, totalCount))
+	if filter.IsActive() {
+		statusParts = append(statusParts, ui.FilterActiveStyle.Render("Filter: "+filter.Summary()))
+	}
+	if excludeCount > 0 {
+		statusParts = append(statusParts, ui.DimStyle.Render(fmt.Sprintf("%d IP(s) excluded", excludeCount)))
+	}
 	if lastErr != nil {
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
 	}
-	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
+	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, " / "), width))
 }

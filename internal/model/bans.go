@@ -18,17 +18,21 @@ func (m *Model) rebuildBansContent() {
 		return
 	}
 
-	if len(m.bans) == 0 {
+	if len(m.filteredBanIdx) == 0 {
+		msg := "  No active bans"
+		if m.filter.IsActive() || m.excludes.Count() > 0 {
+			msg = "  No bans match current filters"
+		}
 		m.bansViewport.SetContentLines([]string{
 			"",
-			ui.DimStyle.Render("  No active bans"),
+			ui.DimStyle.Render(msg),
 		})
 		return
 	}
 
-	lines := make([]string, len(m.bans))
-	for i := range m.bans {
-		ban := &m.bans[i]
+	lines := make([]string, len(m.filteredBanIdx))
+	for i, bidx := range m.filteredBanIdx {
+		ban := &m.bans[bidx]
 		remaining := ban.TTL
 		var expiresIn string
 		if ban.Permanent {

@@ -64,6 +64,36 @@ func (f *Filter) Matches(r *redis.BlockReport) bool {
 	return true
 }
 
+// MatchesBan returns true if the ban passes the filter criteria.
+func (f *Filter) MatchesBan(b *redis.Ban) bool {
+	if f.IP != "" && !strings.Contains(b.IP, f.IP) {
+		return false
+	}
+	if f.Country != "" {
+		countries := strings.Split(f.Country, ",")
+		matched := false
+		for _, c := range countries {
+			if strings.EqualFold(strings.TrimSpace(c), b.Country) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if f.Server != "" && !strings.Contains(strings.ToLower(b.Service), strings.ToLower(f.Server)) {
+		return false
+	}
+	if !f.DateFrom.IsZero() && b.Time().Before(f.DateFrom) {
+		return false
+	}
+	if !f.DateTo.IsZero() && b.Time().After(f.DateTo) {
+		return false
+	}
+	return true
+}
+
 // Summary returns a human-readable summary of the active filters.
 func (f *Filter) Summary() string {
 	if !f.active {

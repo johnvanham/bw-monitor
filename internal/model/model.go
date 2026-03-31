@@ -75,8 +75,9 @@ type Model struct {
 	dnsLookingUp string              // IP currently being looked up (empty = idle)
 
 	// Bans
-	bans      []redis.Ban
-	detailBan *redis.Ban
+	bans           []redis.Ban
+	filteredBanIdx []int
+	detailBan      *redis.Ban
 
 	// IP exclusions
 	excludes           *ExcludeList
@@ -245,6 +246,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case BansLoadedMsg:
 		m.bans = msg.Bans
+		m.refilterBans()
 		m.rebuildBansContent()
 		return m, nil
 
@@ -513,7 +515,7 @@ func (m Model) handleBansListKey(key string) (tea.Model, tea.Cmd) {
 			m.syncBansViewportOffset()
 		}
 	case "down", "j":
-		if m.bansCursor < len(m.bans)-1 {
+		if m.bansCursor < len(m.filteredBanIdx)-1 {
 			m.bansCursor++
 			m.rebuildBansContent()
 			m.syncBansViewportOffset()
@@ -529,17 +531,42 @@ func (m Model) handleBansListKey(key string) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		dataRows := m.dataRows()
 		m.bansCursor += dataRows
-		if m.bansCursor >= len(m.bans) {
-			m.bansCursor = len(m.bans) - 1
+		if m.bansCursor >= len(m.filteredBanIdx) {
+			m.bansCursor = len(m.filteredBanIdx) - 1
 		}
 		if m.bansCursor < 0 {
 			m.bansCursor = 0
 		}
 		m.rebuildBansContent()
 		m.syncBansViewportOffset()
+	case "f":
+		m.openFilter()
+	case "c":
+		m.filter.Clear()
+		m.refilterBans()
+		m.bansCursor = 0
+		m.rebuildBansContent()
+		m.bansViewport.GotoTop()
+	case "x":
+		if m.bansCursor >= 0 && m.bansCursor < len(m.filteredBanIdx) {
+			idx := m.filteredBanIdx[m.bansCursor]
+			m.excludes.Add(m.bans[idx].IP)
+			m.refilterBans()
+			if m.bansCursor >= len(m.filteredBanIdx) {
+				m.bansCursor = len(m.filteredBanIdx) - 1
+			}
+			if m.bansCursor < 0 {
+				m.bansCursor = 0
+			}
+			m.rebuildBansContent()
+		}
+	case "X":
+		m.excludeModalOpen = true
+		m.excludeModalCursor = 0
 	case "enter":
-		if m.bansCursor >= 0 && m.bansCursor < len(m.bans) {
-			m.detailBan = &m.bans[m.bansCursor]
+		if m.bansCursor >= 0 && m.bansCursor < len(m.filteredBanIdx) {
+			idx := m.filteredBanIdx[m.bansCursor]
+			m.detailBan = &m.bans[idx]
 			m.currentView = viewBanDetail
 			m.rebuildDetailContent()
 			m.detailViewport.GotoTop()
@@ -682,6 +709,8 @@ func (m *Model) applyFilter() {
 	m.filter.SetActive()
 	m.refilter()
 	m.reportsCursor = 0
+	m.bansCursor = 0
+	m.rebuildBansContent()
 	m.filterOpen = false
 	m.filterInputs[m.filterFocus].Blur()
 }
@@ -709,6 +738,27 @@ func (m *Model) refilter() {
 				continue
 			}
 			m.filteredIdx = append(m.filteredIdx, i)
+		}
+	}
+	m.refilterBans()
+}
+
+func (m *Model) refilterBans() {
+	if !m.filter.IsActive() && m.excludes.Count() == 0 {
+		m.filteredBanIdx = make([]int, len(m.bans))
+		for i := range m.bans {
+			m.filteredBanIdx[i] = i
+		}
+	} else {
+		m.filteredBanIdx = nil
+		for i := range m.bans {
+			if m.excludes.Contains(m.bans[i].IP) {
+				continue
+			}
+			if m.filter.IsActive() && !m.filter.MatchesBan(&m.bans[i]) {
+				continue
+			}
+			m.filteredBanIdx = append(m.filteredBanIdx, i)
 		}
 	}
 }
@@ -832,11 +882,11 @@ func (m Model) renderBansListView() string {
 	b.WriteString("\n")
 
 	// Status bar
-	b.WriteString(RenderBansStatusBar(m.bans, m.lastErr, m.width))
+	b.WriteString(RenderBansStatusBar(len(m.filteredBanIdx), len(m.bans), m.excludes.Count(), &m.filter, m.lastErr, m.width))
 	b.WriteString("\n")
 
 	// Help bar
-	help := "[1] Reports  [2] Bans  [Enter] Detail  [r] Refresh  [q] Quit"
+	help := "[1] Reports  [2] Bans  [Enter] Detail  [f] Filter  [c] Clear  [x] Exclude IP  [X] Excludes  [r] Refresh  [q] Quit"
 	b.WriteString(ui.HelpStyle.Render(help))
 
 	return b.String()
