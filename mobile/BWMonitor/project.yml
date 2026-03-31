@@ -1,0 +1,30 @@
+name: BWMonitor
+options:
+  bundleIdPrefix: com.bwmonitor
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+
+packages:
+  Yams:
+    url: https://github.com/jpsim/Yams
+    from: "5.0.0"
+
+targets:
+  BWMonitor:
+    type: application
+    platform: iOS
+    sources: [BWMonitor]
+    dependencies:
+      - package: Yams
+    settings:
+      base:
+        INFOPLIST_FILE: BWMonitor/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.bwmonitor.app
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: false
