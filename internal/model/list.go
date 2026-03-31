@@ -84,7 +84,7 @@ func RenderReportsStatusBar(filteredIdx []int, totalReports int, paused bool, fi
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
 	}
 
-	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, " / "), width))
+	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
 }
 
 // RenderBansHeader returns the column header string for the bans list.
@@ -113,5 +113,5 @@ func RenderBansStatusBar(filteredCount, totalCount, excludeCount int, filter *Fi
 	if lastErr != nil {
 		statusParts = append(statusParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B")).Render("Err: "+lastErr.Error()))
 	}
-	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, " / "), width))
+	return ui.StatusBarStyle.Render(ui.PadRight(strings.Join(statusParts, "  |  "), width))
 }

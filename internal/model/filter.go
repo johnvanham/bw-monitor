@@ -1,11 +1,16 @@
 package model
 
 import (
+	"bufio"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/johnvanham/bw-monitor/internal/redis"
 )
+
+const filterFileName = ".bw-monitor-filter"
 
 // Filter holds the current filter criteria.
 type Filter struct {
@@ -118,7 +123,7 @@ func (f *Filter) Summary() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, " | ")
+	return strings.Join(parts, " / ")
 }
 
 // Clear resets all filter criteria.
@@ -134,4 +139,78 @@ func (f *Filter) Clear() {
 // SetActive marks the filter as active.
 func (f *Filter) SetActive() {
 	f.active = f.IP != "" || f.Country != "" || f.Server != "" || !f.DateFrom.IsZero() || !f.DateTo.IsZero()
+}
+
+func filterPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, filterFileName)
+}
+
+// Save persists the current filter to disk.
+func (f *Filter) Save() {
+	file, err := os.Create(filterPath())
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	if f.IP != "" {
+		file.WriteString("ip=" + f.IP + "\n")
+	}
+	if f.Country != "" {
+		file.WriteString("country=" + f.Country + "\n")
+	}
+	if f.Server != "" {
+		file.WriteString("server=" + f.Server + "\n")
+	}
+	if !f.DateFrom.IsZero() {
+		file.WriteString("from=" + f.DateFrom.Format("2006-01-02 15:04") + "\n")
+	}
+	if !f.DateTo.IsZero() {
+		file.WriteString("to=" + f.DateTo.Format("2006-01-02 15:04") + "\n")
+	}
+}
+
+// Load restores a filter from disk.
+func (f *Filter) Load() {
+	file, err := os.Open(filterPath())
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, val := parts[0], parts[1]
+		switch key {
+		case "ip":
+			f.IP = val
+		case "country":
+			f.Country = val
+		case "server":
+			f.Server = val
+		case "from":
+			if t, err := time.Parse("2006-01-02 15:04", val); err == nil {
+				f.DateFrom = t
+			}
+		case "to":
+			if t, err := time.Parse("2006-01-02 15:04", val); err == nil {
+				f.DateTo = t
+			}
+		}
+	}
+	f.SetActive()
+}
+
+// Delete removes the persisted filter file.
+func (f *Filter) Delete() {
+	os.Remove(filterPath())
 }

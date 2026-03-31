@@ -138,12 +138,16 @@ func New(redisClient *redis.Client, reconnector *redis.Reconnector, maxEntries i
 	detailVP := viewport.New()
 	detailVP.KeyMap = detailKeyMap()
 
+	var filter Filter
+	filter.Load()
+
 	return Model{
 		redisClient:     redisClient,
 		reconnector:     reconnector,
 		loading:         true,
 		following:       true,
 		maxEntries:      maxEntries,
+		filter:          filter,
 		filterInputs:    []textinput.Model{ipInput, countryInput, serverInput, dateFromInput, dateToInput},
 		dnsCache:        make(map[string][]string),
 		excludes:        NewExcludeList(),
@@ -470,6 +474,7 @@ func (m Model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		m.openFilter()
 	case "c":
 		m.filter.Clear()
+		m.filter.Delete()
 		m.refilter()
 		m.reportsCursor = 0
 		m.rebuildReportsContent()
@@ -543,6 +548,7 @@ func (m Model) handleBansListKey(key string) (tea.Model, tea.Cmd) {
 		m.openFilter()
 	case "c":
 		m.filter.Clear()
+		m.filter.Delete()
 		m.refilterBans()
 		m.bansCursor = 0
 		m.rebuildBansContent()
@@ -707,6 +713,7 @@ func (m *Model) applyFilter() {
 	}
 
 	m.filter.SetActive()
+	m.filter.Save()
 	m.refilter()
 	m.reportsCursor = 0
 	m.bansCursor = 0
