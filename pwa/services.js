@@ -15,19 +15,13 @@
     var lines = text.replace(/\r\n/g, '\n').split('\n');
     var idx = 0;
 
-    function peekIndent() {
-      while (idx < lines.length) {
-        var line = lines[idx];
-        // skip blank lines and full-line comments
-        if (/^\s*$/.test(line) || /^\s*#/.test(line)) { idx++; continue; }
-        var m = line.match(/^(\s*)/);
-        return m[1].length;
-      }
-      return -1;
+    function skipBlank() {
+      while (idx < lines.length && (/^\s*$/.test(lines[idx]) || /^\s*#/.test(lines[idx]))) idx++;
     }
 
-    function currentLine() {
-      return idx < lines.length ? lines[idx] : null;
+    function indentOf(line) {
+      var m = line.match(/^(\s*)/);
+      return m ? m[1].length : 0;
     }
 
     function parseScalar(raw) {
@@ -36,130 +30,186 @@
       if (raw === '' || raw === '~' || raw === 'null') return null;
       if (raw === 'true') return true;
       if (raw === 'false') return false;
-      // strip quotes
       if ((raw[0] === '"' && raw[raw.length - 1] === '"') ||
           (raw[0] === "'" && raw[raw.length - 1] === "'")) {
         return raw.slice(1, -1);
       }
-      // number
       if (/^-?\d+$/.test(raw)) return parseInt(raw, 10);
       if (/^-?\d+\.\d+$/.test(raw)) return parseFloat(raw);
       return raw;
     }
 
-    function parseValue(raw, baseIndent) {
-      raw = raw.trim();
-      // remove inline comment (not inside quotes)
-      if (raw[0] !== '"' && raw[0] !== "'") {
-        var commentIdx = raw.indexOf(' #');
-        if (commentIdx >= 0) raw = raw.slice(0, commentIdx).trim();
-      }
-      if (raw === '' || raw === '~' || raw === 'null') {
-        // could be a nested mapping or sequence on next lines
-        var ni = peekIndent();
-        if (ni > baseIndent) {
-          return parseBlock(ni);
+    // Split a line into key and value at the first `: ` or trailing `:`
+    function splitKeyValue(line) {
+      var trimmed = line.trim();
+      // Find `: ` separator or trailing `:`
+      for (var i = 0; i < trimmed.length; i++) {
+        if (trimmed[i] === ':') {
+          if (i === trimmed.length - 1 || trimmed[i + 1] === ' ') {
+            return { key: trimmed.slice(0, i).trim(), value: trimmed.slice(i + 1).trim() };
+          }
         }
-        return null;
       }
-      return parseScalar(raw);
+      return null;
     }
 
-    function parseBlock(indent) {
-      var ni = peekIndent();
-      if (ni < 0) return null;
-      var line = currentLine();
+    function parseNode(minIndent) {
+      skipBlank();
+      if (idx >= lines.length) return null;
+
+      var line = lines[idx];
       var trimmed = line.trim();
 
-      // Is this a sequence?
-      if (trimmed.startsWith('- ') || trimmed === '-') {
-        return parseSequence(indent);
+      // Sequence?
+      if (trimmed.startsWith('- ')) {
+        return parseSequence(indentOf(line));
       }
-      // Otherwise a mapping
-      return parseMapping(indent);
+      // Mapping
+      return parseMapping(minIndent);
     }
 
-    function parseMapping(indent) {
+    function parseMapping(minIndent) {
       var obj = {};
       while (idx < lines.length) {
-        var ni = peekIndent();
-        if (ni < 0 || ni < indent) break;
-        if (ni > indent) break; // shouldn't happen for same-level keys
+        skipBlank();
+        if (idx >= lines.length) break;
 
         var line = lines[idx];
+        var indent = indentOf(line);
         var trimmed = line.trim();
 
-        // handle sequence item containing a mapping (e.g. "- name: foo")
+        if (indent < minIndent) break;
         if (trimmed.startsWith('- ')) break;
 
-        var colonIdx = trimmed.indexOf(':');
-        if (colonIdx < 0) { idx++; continue; }
+        var kv = splitKeyValue(trimmed);
+        if (!kv) { idx++; continue; }
 
-        var key = trimmed.slice(0, colonIdx).trim();
-        var rest = trimmed.slice(colonIdx + 1);
         idx++;
 
-        obj[key] = parseValue(rest, indent);
+        var val = kv.value;
+        // Remove inline comment
+        if (val && val[0] !== '"' && val[0] !== "'") {
+          var ci = val.indexOf(' #');
+          if (ci >= 0) val = val.slice(0, ci).trim();
+        }
+
+        if (val === '' || val === '~' || val === 'null') {
+          // Value is on next lines (nested block)
+          skipBlank();
+          if (idx < lines.length) {
+            var nextIndent = indentOf(lines[idx]);
+            var nextTrimmed = lines[idx].trim();
+            if (nextIndent > indent) {
+              obj[kv.key] = parseNode(nextIndent);
+            } else if (nextIndent >= indent && nextTrimmed.startsWith('- ')) {
+              // Sequence at same or deeper indent (common in kubeconfig)
+              obj[kv.key] = parseSequence(nextIndent);
+            } else {
+              obj[kv.key] = null;
+            }
+          } else {
+            obj[kv.key] = null;
+          }
+        } else {
+          obj[kv.key] = parseScalar(val);
+        }
       }
       return obj;
     }
 
-    function parseSequence(indent) {
+    function parseSequence(seqIndent) {
       var arr = [];
       while (idx < lines.length) {
-        var ni = peekIndent();
-        if (ni < 0 || ni < indent) break;
-        if (ni > indent) break;
+        skipBlank();
+        if (idx >= lines.length) break;
 
         var line = lines[idx];
+        var indent = indentOf(line);
         var trimmed = line.trim();
+
+        if (indent < seqIndent) break;
         if (!trimmed.startsWith('- ')) break;
 
-        var after = trimmed.slice(2);
+        // Content after `- `
+        var after = trimmed.slice(2).trim();
+        var itemIndent = indent + 2; // content inside this item is at least here
         idx++;
 
-        // "- key: value" -> mapping item
-        if (after.indexOf(':') >= 0 && !after.startsWith('"') && !after.startsWith("'")) {
-          // The first key-value is part of a mapping; parse the rest at deeper indent
-          var item = {};
-          var firstColon = after.indexOf(':');
-          var k = after.slice(0, firstColon).trim();
-          var v = after.slice(firstColon + 1);
-
-          var childIndent = indent + 2;
-          item[k] = parseValue(v, childIndent);
-
-          // read remaining keys at child indent
-          while (idx < lines.length) {
-            var ci = peekIndent();
-            if (ci < childIndent) break;
-            if (ci > childIndent) {
-              // deeper nesting handled by parseValue
-              break;
-            }
-            var cl = lines[idx].trim();
-            if (cl.startsWith('- ')) break;
-            var cc = cl.indexOf(':');
-            if (cc < 0) { idx++; continue; }
-            var ck = cl.slice(0, cc).trim();
-            var cv = cl.slice(cc + 1);
-            idx++;
-            item[ck] = parseValue(cv, childIndent);
+        if (after === '' || after === '~') {
+          // Bare `- ` with content on next lines
+          skipBlank();
+          if (idx < lines.length && indentOf(lines[idx]) >= itemIndent) {
+            arr.push(parseNode(itemIndent));
+          } else {
+            arr.push(null);
           }
-          arr.push(item);
         } else {
-          arr.push(parseScalar(after));
+          var kv = splitKeyValue(after);
+          if (kv) {
+            // `- key: value` starts a mapping
+            var item = {};
+            var val = kv.value;
+            if (val && val[0] !== '"' && val[0] !== "'") {
+              var ci = val.indexOf(' #');
+              if (ci >= 0) val = val.slice(0, ci).trim();
+            }
+
+            if (val === '' || val === '~' || val === 'null') {
+              // Nested block under this key
+              skipBlank();
+              if (idx < lines.length && indentOf(lines[idx]) > indent) {
+                item[kv.key] = parseNode(indentOf(lines[idx]));
+              } else {
+                item[kv.key] = null;
+              }
+            } else {
+              item[kv.key] = parseScalar(val);
+            }
+
+            // Read remaining keys at itemIndent or deeper
+            while (idx < lines.length) {
+              skipBlank();
+              if (idx >= lines.length) break;
+              var cl = lines[idx];
+              var clIndent = indentOf(cl);
+              var clTrimmed = cl.trim();
+              if (clIndent < itemIndent) break;
+              if (clTrimmed.startsWith('- ')) break;
+
+              var ckv = splitKeyValue(clTrimmed);
+              if (!ckv) { idx++; continue; }
+              idx++;
+
+              var cv = ckv.value;
+              if (cv && cv[0] !== '"' && cv[0] !== "'") {
+                var cci = cv.indexOf(' #');
+                if (cci >= 0) cv = cv.slice(0, cci).trim();
+              }
+
+              if (cv === '' || cv === '~' || cv === 'null') {
+                skipBlank();
+                if (idx < lines.length && indentOf(lines[idx]) > clIndent) {
+                  item[ckv.key] = parseNode(indentOf(lines[idx]));
+                } else {
+                  item[ckv.key] = null;
+                }
+              } else {
+                item[ckv.key] = parseScalar(cv);
+              }
+            }
+            arr.push(item);
+          } else {
+            arr.push(parseScalar(after));
+          }
         }
       }
       return arr;
     }
 
-    // Skip leading document markers
+    // Skip document markers
     while (idx < lines.length && /^\s*---\s*$/.test(lines[idx])) idx++;
 
-    var ni = peekIndent();
-    if (ni < 0) return null;
-    return parseBlock(ni);
+    return parseNode(0);
   }
 
   // ---------------------------------------------------------------------------
@@ -187,6 +237,20 @@
       };
     });
 
+    // If no contexts defined, synthesize one from the first cluster/user
+    if (contexts.length === 0) {
+      var clusters = doc.clusters || [];
+      var users = doc.users || [];
+      var synthName = '(default)';
+      contexts.push({
+        name: synthName,
+        cluster: clusters.length > 0 ? (clusters[0].name || '') : '',
+        user: users.length > 0 ? (users[0].name || '') : '',
+        namespace: ''
+      });
+      if (!currentContext) currentContext = synthName;
+    }
+
     return { contexts: contexts, currentContext: currentContext };
   };
 
@@ -202,21 +266,32 @@
     var doc = parseYAML(yamlString);
     if (!doc) throw new Error('Failed to parse kubeconfig YAML');
 
-    var ctxName = contextName || doc['current-context'];
-    if (!ctxName) throw new Error('No context specified and no current-context in kubeconfig');
-
-    // Find context entry
+    var clusters = doc.clusters || [];
+    var users = doc.users || [];
     var contexts = doc.contexts || [];
-    var ctxEntry = null;
-    for (var i = 0; i < contexts.length; i++) {
-      if (contexts[i].name === ctxName) { ctxEntry = contexts[i]; break; }
-    }
-    if (!ctxEntry) throw new Error('Context "' + ctxName + '" not found');
-    var ctx = ctxEntry.context || {};
 
-    var clusterName = ctx.cluster;
-    var userName = ctx.user;
-    var namespace = ctx.namespace || 'default';
+    var ctxName = contextName || doc['current-context'] || '';
+
+    var clusterName = '';
+    var userName = '';
+    var namespace = 'default';
+
+    if (ctxName && ctxName !== '(default)') {
+      // Find context entry
+      var ctxEntry = null;
+      for (var i = 0; i < contexts.length; i++) {
+        if (contexts[i].name === ctxName) { ctxEntry = contexts[i]; break; }
+      }
+      if (!ctxEntry) throw new Error('Context "' + ctxName + '" not found');
+      var ctx = ctxEntry.context || {};
+      clusterName = ctx.cluster || '';
+      userName = ctx.user || '';
+      namespace = ctx.namespace || 'default';
+    } else {
+      // No context — use first cluster and user
+      if (clusters.length > 0) clusterName = clusters[0].name || '';
+      if (users.length > 0) userName = users[0].name || '';
+    }
 
     // Find cluster entry
     var clusters = doc.clusters || [];

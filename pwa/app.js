@@ -276,11 +276,11 @@ function renderConnectionScreen() {
           ${hasFile ? '✅ ' + esc(state.kubeConfigFileName) : '📄 Import Kubeconfig File'}
         </button>
         <input type="file" id="fileInput" style="display:none" onchange="handleFileImport(this)">
-        ${state.contexts.length > 1 ? `
+        ${state.contexts.length > 0 ? `
         <div class="form-group">
           <label>Context</label>
           <select id="ctxSelect" onchange="handleContextChange(this.value)" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;appearance:auto;">
-            ${state.contexts.map(c => `<option value="${esc(c.name)}" ${c.name === state.selectedContext ? 'selected' : ''}>${esc(c.name)}${c.namespace ? ' (' + esc(c.namespace) + ')' : ''}</option>`).join('')}
+            ${state.contexts.map(c => `<option value="${esc(c.name)}" ${c.name === state.selectedContext ? 'selected' : ''}>${esc(c.name)}${c.cluster ? ' → ' + esc(c.cluster) : ''}${c.namespace ? ' (' + esc(c.namespace) + ')' : ''}</option>`).join('')}
           </select>
         </div>` : ''}
         <div class="form-group">
