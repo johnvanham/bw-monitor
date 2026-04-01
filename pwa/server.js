@@ -10,7 +10,7 @@
 //
 // Options:
 //   --port PORT          Listen port (default: 3000)
-//   --kubeconfig PATH    Kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
+//   --kubeconfig PATH    Kubeconfig file (default: $KUBECONFIG which may be colon-separated, or ~/.kube/config)
 //   --context NAME       Kubeconfig context (default: current-context)
 //   --address ADDR       Listen address (default: 0.0.0.0)
 //
@@ -33,9 +33,16 @@ function getArg(name, def) {
 
 const PORT = parseInt(getArg('port', '3000'), 10);
 const ADDRESS = getArg('address', '0.0.0.0');
-const KUBECONFIG_PATH = getArg('kubeconfig',
-  process.env.KUBECONFIG ||
-  path.join(process.env.HOME || process.env.USERPROFILE || '.', '.kube', 'config'));
+const KUBECONFIG_PATHS = (function() {
+  const explicit = getArg('kubeconfig', '');
+  if (explicit) return [explicit];
+  const env = process.env.KUBECONFIG || '';
+  if (env) {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    return env.split(sep).filter(Boolean);
+  }
+  return [path.join(process.env.HOME || process.env.USERPROFILE || '.', '.kube', 'config')];
+})();
 const CONTEXT_NAME = getArg('context', '');
 
 // ── Minimal YAML parser (kubeconfig subset) ─────────────────
@@ -144,10 +151,29 @@ function parseYAML(text) {
 }
 
 // ── Load kubeconfig ─────────────────────────────────────────
-function loadKubeConfig(filePath, contextName) {
-  const yaml = fs.readFileSync(filePath, 'utf8');
-  const doc = parseYAML(yaml);
-  if (!doc) throw new Error('Failed to parse kubeconfig');
+// Merges multiple kubeconfig files (kubectl-style): arrays are concatenated,
+// first current-context wins.
+function mergeKubeConfigs(filePaths) {
+  const merged = { 'current-context': '', clusters: [], contexts: [], users: [] };
+  for (const fp of filePaths) {
+    let yaml;
+    try { yaml = fs.readFileSync(fp, 'utf8'); } catch (e) {
+      console.warn(`Warning: cannot read kubeconfig ${fp}: ${e.message}`);
+      continue;
+    }
+    const doc = parseYAML(yaml);
+    if (!doc) continue;
+    if (!merged['current-context'] && doc['current-context']) merged['current-context'] = doc['current-context'];
+    if (Array.isArray(doc.clusters)) merged.clusters.push(...doc.clusters);
+    if (Array.isArray(doc.contexts)) merged.contexts.push(...doc.contexts);
+    if (Array.isArray(doc.users)) merged.users.push(...doc.users);
+  }
+  return merged;
+}
+
+function loadKubeConfig(filePaths, contextName) {
+  const doc = mergeKubeConfigs(filePaths);
+  if (!doc.clusters.length && !doc.contexts.length) throw new Error('No valid kubeconfig data found in: ' + filePaths.join(', '));
 
   const ctxName = contextName || doc['current-context'] || '';
   const contexts = doc.contexts || [];
@@ -201,8 +227,8 @@ function loadKubeConfig(filePath, contextName) {
 
 let kubeConfig;
 try {
-  kubeConfig = loadKubeConfig(KUBECONFIG_PATH, CONTEXT_NAME);
-  console.log(`Loaded kubeconfig from ${KUBECONFIG_PATH}`);
+  kubeConfig = loadKubeConfig(KUBECONFIG_PATHS, CONTEXT_NAME);
+  console.log(`Loaded kubeconfig from ${KUBECONFIG_PATHS.join(', ')}`);
   console.log(`  Context: ${kubeConfig.contextName || '(default)'}`);
   console.log(`  Server:  ${kubeConfig.server}`);
   console.log(`  Auth:    ${kubeConfig.token ? 'token' : kubeConfig.clientCert ? 'client-cert' : kubeConfig.username ? 'basic' : 'none'}`);
