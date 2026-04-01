@@ -32,6 +32,9 @@ const state = {
   lastError: null,
   service: null,
   pollTimer: null,
+  // Proxy mode
+  proxyMode: false,
+  proxyInfo: null, // { server, context, namespace, contexts }
 };
 
 // ── Helpers ──────────────────────────────────────────────
@@ -189,13 +192,23 @@ function lookupDNS(ip) {
 
 // ── Connection ───────────────────────────────────────────
 async function doConnect() {
-  if (!state.kubeConfigYAML) { state.connectError = 'No kubeconfig loaded'; render(); return; }
   state.connecting = true;
   state.connectError = null;
   render();
   try {
-    const config = KubeConfig.parse(state.kubeConfigYAML, state.selectedContext || undefined);
-    const k8s = new KubernetesClient(config);
+    let k8s;
+    if (state.proxyMode) {
+      // In proxy mode, use the current origin as the server (API calls are proxied)
+      k8s = new KubernetesClient({
+        server: window.location.origin,
+        token: null, username: null, password: null,
+        insecureSkipTLSVerify: false,
+      });
+    } else {
+      if (!state.kubeConfigYAML) { throw new Error('No kubeconfig loaded'); }
+      const config = KubeConfig.parse(state.kubeConfigYAML, state.selectedContext || undefined);
+      k8s = new KubernetesClient(config);
+    }
     const svc = new MonitorService(k8s, state.namespace);
     const pod = await svc.connect();
     state.service = svc;
@@ -266,6 +279,33 @@ async function loadBans() {
 // ── Render: Connection Screen ────────────────────────────
 function renderConnectionScreen() {
   const hasFile = !!state.kubeConfigYAML;
+
+  if (state.proxyMode) {
+    // Proxy mode: server already has kubeconfig, just show server info + namespace + connect
+    const info = state.proxyInfo || {};
+    return `
+      <div class="connect-screen">
+        <div class="connect-logo">🛡️</div>
+        <div class="connect-title">BW Monitor</div>
+        <div class="connect-subtitle">BunkerWeb Security Monitor</div>
+        <div class="connect-form">
+          <div class="proxy-info" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;font-size:13px;color:var(--text-dim);">
+            <div style="color:var(--teal);font-weight:600;margin-bottom:6px;">Proxy Mode</div>
+            <div>Server: <span style="color:var(--text)">${esc(info.server || 'unknown')}</span></div>
+            <div>Context: <span style="color:var(--text)">${esc(info.context || '(default)')}</span></div>
+          </div>
+          <div class="form-group">
+            <label>Namespace</label>
+            <input type="text" value="${esc(state.namespace)}" id="nsInput" placeholder="bunkerweb">
+          </div>
+          <button class="btn btn-primary" onclick="handleConnect()" ${state.connecting ? 'disabled' : ''}>
+            ${state.connecting ? '⏳ Connecting...' : '⚡ Connect'}
+          </button>
+          ${state.connectError ? '<div class="connect-error">⚠️ ' + esc(state.connectError) + '</div>' : ''}
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="connect-screen">
       <div class="connect-logo">🛡️</div>
@@ -778,7 +818,28 @@ function render() {
 
 // ── Init ─────────────────────────────────────────────────
 restoreState();
-render();
+
+// Detect proxy mode: if served from server.js, /proxy-info returns config
+(async function init() {
+  try {
+    const resp = await fetch('/proxy-info');
+    if (resp.ok) {
+      const info = await resp.json();
+      if (info.proxy) {
+        state.proxyMode = true;
+        state.proxyInfo = info;
+        state.namespace = info.namespace || state.namespace;
+        state.contexts = (info.contexts || []).map(c => ({
+          name: c.name, cluster: c.cluster || '', namespace: c.namespace || '',
+        }));
+        state.selectedContext = info.context || '';
+      }
+    }
+  } catch (e) {
+    // Not behind proxy, that's fine — user will import kubeconfig manually
+  }
+  render();
+})();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
