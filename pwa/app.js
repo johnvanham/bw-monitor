@@ -12,6 +12,8 @@ const state = {
   kubeConfigFileName: null,
   namespace: 'bunkerweb',
   maxEntries: 5000,
+  contexts: [],        // [{name, cluster, user, namespace}]
+  selectedContext: '',  // chosen context name (empty = current-context)
   reports: [],
   bans: [],
   totalReports: 0,
@@ -141,6 +143,7 @@ function saveState() {
     localStorage.setItem('bwm_kubefile', state.kubeConfigFileName || '');
     localStorage.setItem('bwm_namespace', state.namespace);
     localStorage.setItem('bwm_excludes', JSON.stringify([...state.excludedIPs]));
+    localStorage.setItem('bwm_context', state.selectedContext);
   } catch {}
 }
 
@@ -150,6 +153,16 @@ function restoreState() {
     if (kc) { state.kubeConfigYAML = kc; state.kubeConfigFileName = localStorage.getItem('bwm_kubefile'); }
     const ns = localStorage.getItem('bwm_namespace');
     if (ns) state.namespace = ns;
+    const ctx = localStorage.getItem('bwm_context');
+    if (ctx) state.selectedContext = ctx;
+    // Re-parse contexts from saved kubeconfig
+    if (state.kubeConfigYAML) {
+      try {
+        const info = KubeConfig.listContexts(state.kubeConfigYAML);
+        state.contexts = info.contexts;
+        if (!state.selectedContext) state.selectedContext = info.currentContext;
+      } catch {}
+    }
     const ex = localStorage.getItem('bwm_excludes');
     if (ex) state.excludedIPs = new Set(JSON.parse(ex));
   } catch {}
@@ -181,7 +194,7 @@ async function doConnect() {
   state.connectError = null;
   render();
   try {
-    const config = KubeConfig.parse(state.kubeConfigYAML);
+    const config = KubeConfig.parse(state.kubeConfigYAML, state.selectedContext || undefined);
     const k8s = new KubernetesClient(config);
     const svc = new MonitorService(k8s, state.namespace);
     const pod = await svc.connect();
@@ -263,6 +276,13 @@ function renderConnectionScreen() {
           ${hasFile ? '✅ ' + esc(state.kubeConfigFileName) : '📄 Import Kubeconfig File'}
         </button>
         <input type="file" id="fileInput" style="display:none" onchange="handleFileImport(this)">
+        ${state.contexts.length > 1 ? `
+        <div class="form-group">
+          <label>Context</label>
+          <select id="ctxSelect" onchange="handleContextChange(this.value)" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;appearance:auto;">
+            ${state.contexts.map(c => `<option value="${esc(c.name)}" ${c.name === state.selectedContext ? 'selected' : ''}>${esc(c.name)}${c.namespace ? ' (' + esc(c.namespace) + ')' : ''}</option>`).join('')}
+          </select>
+        </div>` : ''}
         <div class="form-group">
           <label>Namespace</label>
           <input type="text" value="${esc(state.namespace)}" id="nsInput" placeholder="bunkerweb">
@@ -596,10 +616,30 @@ window.handleFileImport = function(input) {
   reader.onload = () => {
     state.kubeConfigYAML = reader.result;
     state.kubeConfigFileName = file.name;
+    // Extract available contexts
+    try {
+      const info = KubeConfig.listContexts(reader.result);
+      state.contexts = info.contexts;
+      state.selectedContext = info.currentContext;
+    } catch (e) {
+      state.contexts = [];
+      state.selectedContext = '';
+    }
     saveState();
     render();
   };
   reader.readAsText(file);
+};
+
+window.handleContextChange = function(contextName) {
+  state.selectedContext = contextName;
+  // Update namespace from the selected context if it has one
+  const ctx = state.contexts.find(c => c.name === contextName);
+  if (ctx && ctx.namespace) {
+    state.namespace = ctx.namespace;
+  }
+  saveState();
+  render();
 };
 
 window.handleConnect = function() {

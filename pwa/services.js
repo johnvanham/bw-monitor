@@ -169,16 +169,41 @@
   function KubeConfig() {}
 
   /**
-   * Parse a kubeconfig YAML string and resolve current-context into a flat
-   * config object: { server, caCertData, token, username, password,
-   * insecureSkipTLSVerify, namespace }.
+   * List all available contexts from a kubeconfig YAML string.
+   * Returns { contexts: [{name, cluster, user, namespace}], currentContext: string }
    */
-  KubeConfig.parse = function (yamlString) {
+  KubeConfig.listContexts = function (yamlString) {
     var doc = parseYAML(yamlString);
     if (!doc) throw new Error('Failed to parse kubeconfig YAML');
 
-    var ctxName = doc['current-context'];
-    if (!ctxName) throw new Error('No current-context in kubeconfig');
+    var currentContext = doc['current-context'] || '';
+    var contexts = (doc.contexts || []).map(function (entry) {
+      var ctx = entry.context || {};
+      return {
+        name: entry.name || '',
+        cluster: ctx.cluster || '',
+        user: ctx.user || '',
+        namespace: ctx.namespace || ''
+      };
+    });
+
+    return { contexts: contexts, currentContext: currentContext };
+  };
+
+  /**
+   * Parse a kubeconfig YAML string and resolve a context into a flat
+   * config object: { server, caCertData, token, username, password,
+   * insecureSkipTLSVerify, namespace }.
+   *
+   * @param {string} yamlString
+   * @param {string} [contextName] - Context to use. If omitted, uses current-context.
+   */
+  KubeConfig.parse = function (yamlString, contextName) {
+    var doc = parseYAML(yamlString);
+    if (!doc) throw new Error('Failed to parse kubeconfig YAML');
+
+    var ctxName = contextName || doc['current-context'];
+    if (!ctxName) throw new Error('No context specified and no current-context in kubeconfig');
 
     // Find context entry
     var contexts = doc.contexts || [];
