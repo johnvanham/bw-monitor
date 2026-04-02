@@ -781,28 +781,64 @@ window.closeDetail = function() {
 
 window.loadBans = loadBans;
 
-// Long-press / swipe to exclude (simplified: add exclude buttons contextually)
-// For mobile, we add a touch-hold handler
+// ── Long-press to exclude ───────────────────────────────
 let longPressTimer = null;
+let longPressRow = null;
+
+function showExcludeConfirm(ip, color) {
+  // Remove any existing confirm modal
+  const existing = document.querySelector('.exclude-confirm-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'exclude-confirm-overlay';
+  overlay.innerHTML = `
+    <div class="exclude-confirm">
+      <div class="exclude-confirm-title">Exclude IP</div>
+      <div class="exclude-confirm-ip" style="color:${color}">${esc(ip)}</div>
+      <div class="exclude-confirm-msg">Hide all entries from this IP?</div>
+      <div class="exclude-confirm-btns">
+        <button class="exclude-confirm-cancel" id="excCancel">Cancel</button>
+        <button class="exclude-confirm-ok" id="excOk">Exclude</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  // Animate in
+  requestAnimationFrame(() => overlay.classList.add('visible'));
+
+  function dismiss() { overlay.classList.remove('visible'); setTimeout(() => overlay.remove(), 200); }
+
+  document.getElementById('excCancel').onclick = dismiss;
+  overlay.addEventListener('click', e => { if (e.target === overlay) dismiss(); });
+  document.getElementById('excOk').onclick = () => {
+    state.excludedIPs.add(ip);
+    saveState();
+    dismiss();
+    render();
+  };
+}
+
 document.addEventListener('touchstart', e => {
   const row = e.target.closest('.report-row, .ban-row');
   if (!row) return;
+  longPressRow = row;
   longPressTimer = setTimeout(() => {
+    // Visual pulse feedback
+    row.classList.add('long-press-active');
+    setTimeout(() => row.classList.remove('long-press-active'), 300);
+
     const idx = parseInt(row.getAttribute('onclick')?.match(/\d+/)?.[0]);
     if (isNaN(idx)) return;
     const items = state.currentTab === 'reports' ? getFilteredReports() : getFilteredBans();
     if (idx >= 0 && idx < items.length) {
       const ip = items[idx].ip;
-      if (confirm('Exclude IP ' + ip + '?')) {
-        state.excludedIPs.add(ip);
-        saveState();
-        render();
-      }
+      showExcludeConfirm(ip, ipColor(ip));
     }
   }, 600);
 });
-document.addEventListener('touchend', () => { clearTimeout(longPressTimer); });
-document.addEventListener('touchmove', () => { clearTimeout(longPressTimer); });
+document.addEventListener('touchend', () => { clearTimeout(longPressTimer); longPressRow = null; });
+document.addEventListener('touchmove', () => { clearTimeout(longPressTimer); longPressRow = null; });
 
 // ── Main Render ──────────────────────────────────────────
 function render() {
