@@ -249,29 +249,11 @@ function startPolling() {
     try {
       const newReports = await state.service.pollNew();
       if (newReports && newReports.length) {
-        // Measure existing row heights so we can offset scroll
-        const listEl = document.getElementById('listContainer');
-        const wasAtTop = listEl ? listEl.scrollTop < 5 : true;
-        const oldScroll = listEl ? listEl.scrollTop : 0;
-
         state.reports = newReports.concat(state.reports);
         state.totalReports += newReports.length;
         state.lastError = null;
+        state._pendingNewCount = newReports.length;
         render();
-
-        // If user was scrolled down, offset by the height of new items
-        if (!wasAtTop) {
-          const newListEl = document.getElementById('listContainer');
-          if (newListEl) {
-            // Estimate: measure how much taller the list got
-            const rows = newListEl.querySelectorAll('.report-row');
-            let addedHeight = 0;
-            for (let i = 0; i < newReports.length && i < rows.length; i++) {
-              addedHeight += rows[i].offsetHeight;
-            }
-            newListEl.scrollTop = oldScroll + addedHeight;
-          }
-        }
       }
     } catch (e) {
       state.lastError = e.message || String(e);
@@ -930,8 +912,10 @@ function render() {
   const app = document.getElementById('app');
   // Preserve scroll position of list container
   const listEl = document.getElementById('listContainer');
-  const scrollTop = listEl ? listEl.scrollTop : 0;
-  const wasAtTop = listEl ? listEl.scrollTop < 5 : true;
+  const savedScroll = listEl ? listEl.scrollTop : 0;
+  const wasAtTop = !listEl || savedScroll < 5;
+  const pendingNew = state._pendingNewCount || 0;
+  state._pendingNewCount = 0;
 
   if (!state.connected) {
     app.innerHTML = renderConnectionScreen();
@@ -939,10 +923,19 @@ function render() {
     app.innerHTML = renderDetailView();
   } else {
     app.innerHTML = renderMainView();
-    // Restore scroll: only jump to top if was already at top
     const newListEl = document.getElementById('listContainer');
     if (newListEl && !wasAtTop) {
-      newListEl.scrollTop = scrollTop;
+      if (pendingNew > 0 && state.currentTab === 'reports') {
+        // New items prepended — offset scroll so visible rows don't shift
+        const rows = newListEl.querySelectorAll('.report-row');
+        let addedHeight = 0;
+        for (let i = 0; i < pendingNew && i < rows.length; i++) {
+          addedHeight += rows[i].offsetHeight;
+        }
+        newListEl.scrollTop = savedScroll + addedHeight;
+      } else {
+        newListEl.scrollTop = savedScroll;
+      }
     }
   }
 }
@@ -959,7 +952,8 @@ restoreState();
       if (info.proxy) {
         state.proxyMode = true;
         state.proxyInfo = info;
-        state.namespace = info.namespace || state.namespace;
+        // Only override namespace if server provides a meaningful one (not just 'default')
+        if (info.namespace && info.namespace !== 'default') state.namespace = info.namespace;
         state.contexts = (info.contexts || []).map(c => ({
           name: c.name, cluster: c.cluster || '', namespace: c.namespace || '',
         }));
