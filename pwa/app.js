@@ -249,10 +249,29 @@ function startPolling() {
     try {
       const newReports = await state.service.pollNew();
       if (newReports && newReports.length) {
+        // Measure existing row heights so we can offset scroll
+        const listEl = document.getElementById('listContainer');
+        const wasAtTop = listEl ? listEl.scrollTop < 5 : true;
+        const oldScroll = listEl ? listEl.scrollTop : 0;
+
         state.reports = newReports.concat(state.reports);
         state.totalReports += newReports.length;
         state.lastError = null;
         render();
+
+        // If user was scrolled down, offset by the height of new items
+        if (!wasAtTop) {
+          const newListEl = document.getElementById('listContainer');
+          if (newListEl) {
+            // Estimate: measure how much taller the list got
+            const rows = newListEl.querySelectorAll('.report-row');
+            let addedHeight = 0;
+            for (let i = 0; i < newReports.length && i < rows.length; i++) {
+              addedHeight += rows[i].offsetHeight;
+            }
+            newListEl.scrollTop = oldScroll + addedHeight;
+          }
+        }
       }
     } catch (e) {
       state.lastError = e.message || String(e);
@@ -376,10 +395,13 @@ function renderMainView() {
         <div class="title-bar-context">${contextLabel}</div>
         <div class="title-bar-actions">
           ${!isReports ? '<button onclick="loadBans()" title="Refresh">↻</button>' : ''}
-          <button onclick="toggleMenu()">⋯</button>
+          <button class="menu-btn" onclick="toggleMenu()" title="Menu"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="4" width="14" height="2" rx="1" fill="#0d1117"/><rect x="3" y="9" width="14" height="2" rx="1" fill="#0d1117"/><rect x="3" y="14" width="14" height="2" rx="1" fill="#0d1117"/></svg></button>
         </div>
       </div>
-      <div class="list-container">${listHTML}</div>
+      <div class="list-container" id="listContainer">
+        <div class="ptr-indicator" id="ptrIndicator"><span class="ptr-spinner"></span>Refreshing…</div>
+        ${listHTML}
+      </div>
       <div class="status-bar">${statusParts.join(' &nbsp;|&nbsp; ')}</div>
       <div class="tab-bar">
         <button class="tab-btn ${state.currentTab === 'reports' ? 'active' : ''}" onclick="switchTab('reports')">
@@ -840,15 +862,88 @@ document.addEventListener('touchstart', e => {
 document.addEventListener('touchend', () => { clearTimeout(longPressTimer); longPressRow = null; });
 document.addEventListener('touchmove', () => { clearTimeout(longPressTimer); longPressRow = null; });
 
+// ── Pull-to-refresh ─────────────────────────────────────
+let ptrStartY = 0;
+let ptrActive = false;
+let ptrRefreshing = false;
+
+document.addEventListener('touchstart', e => {
+  if (ptrRefreshing) return;
+  const listEl = document.getElementById('listContainer');
+  if (!listEl || listEl.scrollTop > 0) return;
+  ptrStartY = e.touches[0].clientY;
+  ptrActive = true;
+}, { passive: true });
+
+document.addEventListener('touchmove', e => {
+  if (!ptrActive || ptrRefreshing) return;
+  const dy = e.touches[0].clientY - ptrStartY;
+  const indicator = document.getElementById('ptrIndicator');
+  if (!indicator) return;
+  if (dy > 10) {
+    const h = Math.min(dy * 0.5, 50);
+    indicator.style.height = h + 'px';
+    indicator.style.transition = 'none';
+  } else {
+    indicator.style.height = '0';
+  }
+}, { passive: true });
+
+document.addEventListener('touchend', async () => {
+  if (!ptrActive || ptrRefreshing) { ptrActive = false; return; }
+  ptrActive = false;
+  const indicator = document.getElementById('ptrIndicator');
+  if (!indicator) return;
+  const h = parseFloat(indicator.style.height) || 0;
+  indicator.style.transition = '';
+  if (h >= 44) {
+    // Trigger refresh
+    ptrRefreshing = true;
+    indicator.classList.add('pulling');
+    indicator.style.height = '';
+    try {
+      if (state.service) {
+        if (state.currentTab === 'reports') {
+          const newReports = await state.service.pollNew();
+          if (newReports && newReports.length) {
+            state.reports = newReports.concat(state.reports);
+            state.totalReports += newReports.length;
+            state.lastError = null;
+          }
+        } else {
+          await loadBans();
+        }
+      }
+    } catch (e) {
+      state.lastError = e.message || String(e);
+    }
+    ptrRefreshing = false;
+    indicator.classList.remove('pulling');
+    render();
+  } else {
+    indicator.style.height = '0';
+  }
+});
+
 // ── Main Render ──────────────────────────────────────────
 function render() {
   const app = document.getElementById('app');
+  // Preserve scroll position of list container
+  const listEl = document.getElementById('listContainer');
+  const scrollTop = listEl ? listEl.scrollTop : 0;
+  const wasAtTop = listEl ? listEl.scrollTop < 5 : true;
+
   if (!state.connected) {
     app.innerHTML = renderConnectionScreen();
   } else if (state.currentView === 'detail') {
     app.innerHTML = renderDetailView();
   } else {
     app.innerHTML = renderMainView();
+    // Restore scroll: only jump to top if was already at top
+    const newListEl = document.getElementById('listContainer');
+    if (newListEl && !wasAtTop) {
+      newListEl.scrollTop = scrollTop;
+    }
   }
 }
 
