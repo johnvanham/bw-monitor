@@ -1,154 +1,73 @@
 # BW Monitor
 
-A terminal UI application for streaming and inspecting BunkerWeb block reports and active bans from a Kubernetes cluster in real-time.
+A multi-platform application for streaming and inspecting BunkerWeb block reports and active bans from a Kubernetes cluster in real-time.
 
-![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)
+## Variants
 
-## Features
+| Variant | Directory | Platform | Stack |
+|---------|-----------|----------|-------|
+| [Go TUI](tui-go/) | `tui-go/` | Terminal | Go, Bubble Tea v2, Lip Gloss, go-redis |
+| [Rust TUI](tui-rust/) | `tui-rust/` | Terminal | Rust, Ratatui, Crossterm |
+| [PWA](pwa/) | `pwa/` | Browser / Mobile | Vanilla JS, Service Worker, Node.js proxy |
+| [iOS](mobile/BWMonitor/) | `mobile/` | iOS | Swift, SwiftUI |
+
+### Go TUI (`tui-go/`)
+
+The original terminal UI. Connects via kubectl port-forward to the BunkerWeb Redis pod using a native Redis client (go-redis). Full-featured with live streaming, filtering, IP exclusion, detail views, and colour-coded IPs.
+
+```bash
+cd tui-go && go build -o bw-monitor . && ./bw-monitor
+```
+
+### Rust TUI (`tui-rust/`)
+
+A Rust port of the Go TUI using the Ratatui framework. Mirrors the same UI layout and functionality — reports list, bans list, detail views, filtering, IP exclusion, and live polling. Connects to Redis via Kubernetes exec WebSocket.
+
+```bash
+cd tui-rust && cargo build --release && ./target/release/bw-monitor
+```
+
+### PWA (`pwa/`)
+
+Progressive Web App that runs in any browser. Includes a Node.js proxy server that handles kubeconfig auth and proxies Kubernetes API requests (solving CORS). Can be added to the home screen for an app-like experience.
+
+```bash
+cd pwa && node server.js
+```
+
+### iOS (`mobile/`)
+
+Native iOS app built with SwiftUI. Connects to the Kubernetes API directly using kubeconfig imported on device. Designed for iOS 17+ and can be sideloaded without the App Store.
+
+## Features (all variants)
 
 - **Live streaming** of blocked requests from BunkerWeb's Redis store
 - **Active bans view** showing currently banned IPs with full event history
-- **Colour-coded IPs** — each IP gets a consistent colour from a 20-colour palette, making it easy to spot repeat offenders
-- **Detail views** with full report data, parsed user agent info, country names, and async reverse DNS lookup
-- **Filterable** by IP, country code, and date/time range
+- **Colour-coded IPs** — each IP gets a consistent colour from a 20-colour palette
+- **Detail views** with full report data, country info, and reverse DNS lookup
+- **Filterable** by IP, country code, server name, and date range
 - **IP exclusion** — hide noisy IPs from the list, persisted between sessions
-- **Pause/resume** the live stream to inspect entries without the list moving
-- **Auto-follow** newest entries, with smart cursor tracking when scrolling history
 
 ## Prerequisites
 
-- Go 1.24+
-- `kubectl` configured with access to a cluster running BunkerWeb
-- BunkerWeb deployed with its built-in Redis (the `redis-bunkerweb` pod)
-
-## Installation
-
-```bash
-go install github.com/johnvanham/bw-monitor@latest
-```
-
-Or build from source:
-
-```bash
-git clone https://github.com/johnvanham/bw-monitor.git
-cd bw-monitor
-go build -o bw-monitor .
-```
-
-## Usage
-
-```bash
-# Use current kubectl context, default namespace (bunkerweb)
-./bw-monitor
-
-# Custom namespace
-./bw-monitor --namespace my-bunkerweb-ns
-
-# Limit initial load (default: 1000)
-./bw-monitor --max-entries 5000
-```
-
-## Key Bindings
-
-### Reports List (default view)
-
-| Key | Action |
-|-----|--------|
-| `1` | Switch to reports view |
-| `2` | Switch to bans view |
-| `Space` | Pause / resume live stream |
-| `Up` / `k` | Move selection up |
-| `Down` / `j` | Move selection down |
-| `PgUp` / `PgDn` | Page up / down |
-| `Home` | Jump to newest (re-enables auto-follow) |
-| `End` | Jump to oldest loaded entry |
-| `Enter` | View report details |
-| `f` | Open filter modal |
-| `c` | Clear active filters |
-| `x` | Exclude selected IP from list |
-| `X` | View/manage excluded IPs |
-| `q` / `Ctrl+C` | Quit |
-
-### Bans List
-
-| Key | Action |
-|-----|--------|
-| `1` | Switch to reports view |
-| `2` | Switch to bans view |
-| `Up` / `k` | Move selection up |
-| `Down` / `j` | Move selection down |
-| `Enter` | View ban details |
-| `r` | Refresh bans list |
-| `q` / `Ctrl+C` | Quit |
-
-### Detail View (reports and bans)
-
-| Key | Action |
-|-----|--------|
-| `Up` / `k` | Scroll up |
-| `Down` / `j` | Scroll down |
-| `PgUp` / `PgDn` | Page up / down |
-| `Esc` / `q` | Back to list |
-
-### Filter Modal
-
-| Key | Action |
-|-----|--------|
-| `Tab` / `Down` | Next field |
-| `Shift+Tab` / `Up` | Previous field |
-| `Enter` | Apply filter |
-| `Esc` | Cancel |
-
-Filter fields:
-- **IP** — substring match (e.g. `192.168` matches any IP containing that)
-- **Country** — two-letter country code (e.g. `GB`, `US`)
-- **From / To** — date range in `YYYY-MM-DD HH:MM` format
-
-### Exclude IPs Modal
-
-| Key | Action |
-|-----|--------|
-| `Up` / `Down` | Navigate list |
-| `Delete` / `Backspace` | Remove exclusion |
-| `Esc` | Close |
-
-Excluded IPs are saved to `~/.bw-monitor-excludes` and persist between sessions.
+- Kubernetes cluster running BunkerWeb with its built-in Redis
+- `kubectl` / kubeconfig access to the cluster
 
 ## How It Works
 
-BW Monitor connects to the Kubernetes cluster using your current kubectl context, discovers the BunkerWeb Redis pod, and opens a port-forward to it. It then connects a native Redis client (go-redis) through the tunnel and reads the `requests` list which contains JSON-encoded block reports. On startup it loads existing reports, then polls every 2 seconds for new entries.
+All variants read BunkerWeb's block reports from the `requests` list in Redis, and active bans from `bans_*` keys. The TUI variants use port-forwarding or exec to reach Redis inside the cluster. The PWA uses a Node.js proxy to handle auth and CORS. The iOS app connects directly to the Kubernetes API.
 
-Active bans are read from `bans_*` keys in Redis, each containing the ban metadata and the full list of requests that triggered the ban.
-
-The port-forward is managed automatically — no manual `kubectl port-forward` is needed. The persistent connection is significantly more efficient than per-request exec, as it avoids repeated SPDY/TLS handshakes.
-
-## Architecture
+## Repository Structure
 
 ```
-Kubernetes Cluster
-  └─ redis-bunkerweb pod (:6379)
-              │
-              │ port-forward (client-go)
-              │
-         localhost:<port>
-              │
-              │ go-redis (native Redis protocol)
-              ▼
-         bw-monitor
-           ├─ internal/k8s/     Kubernetes client, pod discovery, port-forward
-           ├─ internal/redis/   go-redis client, report parsing, ban loading
-           ├─ internal/model/   Bubble Tea v2 model, viewport-based views,
-           │                    filter/exclude modals (lipgloss.Place)
-           └─ internal/ui/      Styles, IP colour palette, formatting
+bw-monitor/
+├── tui-go/      Go terminal UI (Bubble Tea)
+├── tui-rust/    Rust terminal UI (Ratatui)
+├── pwa/         Progressive Web App + proxy server
+└── mobile/      iOS app (SwiftUI)
 ```
 
-### Built with
-
-- [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) — TUI framework
-- [Bubbles v2](https://github.com/charmbracelet/bubbles) — viewport, textinput components
-- [Lip Gloss v2](https://github.com/charmbracelet/lipgloss) — terminal styling and layout
-- [go-redis](https://github.com/redis/go-redis) — Redis client
-- [client-go](https://github.com/kubernetes/client-go) — Kubernetes API
+Each directory is self-contained and can be split into its own repository if needed.
 
 ## License
 

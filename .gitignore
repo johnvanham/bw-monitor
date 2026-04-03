@@ -1,0 +1,16 @@
+# Go
+tui-go/bw-monitor
+tui-go/dist/
+
+# Rust
+tui-rust/target/
+
+# Node
+pwa/node_modules/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
