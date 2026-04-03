@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams};
 use std::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener as TokioTcpListener;
 
 pub struct Client {
@@ -42,17 +41,15 @@ impl Client {
     }
 
     /// Start a port-forward to the given pod and return the local port.
-    /// Uses the kube crate's portforward API.
     pub async fn start_port_forward(&self, pod_name: &str, remote_port: u16) -> Result<u16> {
         let pods: Api<Pod> = Api::namespaced(self.client.clone(), &self.namespace);
 
-        // Find a free local port
         let local_port = free_port()?;
 
         let pod_name = pod_name.to_string();
         let pods_clone = pods.clone();
 
-        // Spawn the port-forward proxy in the background
+        // Spawn a TCP proxy that forwards connections through the K8s portforward API
         tokio::spawn(async move {
             let listener = match TokioTcpListener::bind(format!("127.0.0.1:{}", local_port)).await
             {
@@ -64,7 +61,7 @@ impl Client {
             };
 
             loop {
-                let (mut tcp_stream, _) = match listener.accept().await {
+                let (tcp_stream, _) = match listener.accept().await {
                     Ok(s) => s,
                     Err(_) => continue,
                 };
@@ -81,7 +78,7 @@ impl Client {
                         }
                     };
 
-                    let mut upstream = match pf.take_stream(remote_port) {
+                    let upstream = match pf.take_stream(remote_port) {
                         Some(s) => s,
                         None => {
                             eprintln!("port-forward: no stream for port {}", remote_port);
@@ -89,20 +86,17 @@ impl Client {
                         }
                     };
 
-                    let (mut tcp_read, mut tcp_write) = tcp_stream.split();
-                    let (mut up_read, mut up_write) = tokio::io::split(&mut upstream);
+                    // Split both sides and copy bidirectionally
+                    let (mut tcp_read, mut tcp_write) = tokio::io::split(tcp_stream);
+                    let (mut up_read, mut up_write) = tokio::io::split(upstream);
 
-                    let _ = tokio::io::copy_bidirectional(
-                        &mut TwoHalf {
-                            r: &mut tcp_read,
-                            w: &mut up_write,
-                        },
-                        &mut TwoHalf {
-                            r: &mut up_read,
-                            w: &mut tcp_write,
-                        },
-                    )
-                    .await;
+                    let client_to_server = tokio::io::copy(&mut tcp_read, &mut up_write);
+                    let server_to_client = tokio::io::copy(&mut up_read, &mut tcp_write);
+
+                    let _ = tokio::try_join!(client_to_server, server_to_client);
+
+                    // Ensure the portforward is joined to clean up
+                    let _ = pf.join().await;
                 });
             }
         });
@@ -117,48 +111,4 @@ impl Client {
 fn free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     Ok(listener.local_addr()?.port())
-}
-
-/// Helper to combine a reader and writer into a single AsyncRead + AsyncWrite.
-struct TwoHalf<R, W> {
-    r: R,
-    w: W,
-}
-
-impl<R: AsyncReadExt + Unpin, W: Unpin> tokio::io::AsyncRead for TwoHalf<R, W> {
-    fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        std::pin::Pin::new(&mut this.r).poll_read(cx, buf)
-    }
-}
-
-impl<R: Unpin, W: AsyncWriteExt + Unpin> tokio::io::AsyncWrite for TwoHalf<R, W> {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let this = self.get_mut();
-        std::pin::Pin::new(&mut this.w).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let this = self.get_mut();
-        std::pin::Pin::new(&mut this.w).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let this = self.get_mut();
-        std::pin::Pin::new(&mut this.w).poll_shutdown(cx)
-    }
 }

@@ -101,6 +101,8 @@ pub struct App {
 
     // Errors
     pub last_error: Option<String>,
+    pub error_modal: Option<String>, // Full-screen error modal with wrapped text
+    pub fatal: bool,                 // If true, quit on dismiss
 
     // Loading
     pub loading: bool,
@@ -148,6 +150,8 @@ impl App {
             width: 0,
             height: 0,
             last_error: None,
+            error_modal: None,
+            fatal: false,
             loading: true,
             max_entries,
             dns: DnsCache::default(),
@@ -176,7 +180,9 @@ impl App {
             }
             Err(e) => {
                 self.loading = false;
-                self.last_error = Some(format!("Load error: {}", e));
+                let msg = format!("Load error: {}", e);
+                self.last_error = Some(msg.clone());
+                self.show_error(msg, false);
             }
         }
     }
@@ -316,7 +322,21 @@ impl App {
     }
 
     /// Handle a key event. Returns true if the app should quit.
+    /// Show an error in a modal popup. If fatal, app quits on dismiss.
+    pub fn show_error(&mut self, msg: String, fatal: bool) {
+        self.error_modal = Some(msg);
+        self.fatal = fatal;
+    }
+
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        // Error modal: any key dismisses
+        if self.error_modal.is_some() {
+            let is_fatal = self.fatal;
+            self.error_modal = None;
+            self.fatal = false;
+            return is_fatal;
+        }
+
         // Exclude modal
         if self.exclude_modal_open {
             return self.handle_exclude_modal_key(code);

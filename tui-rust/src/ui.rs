@@ -139,6 +139,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.exclude_modal_open {
         draw_exclude_modal(f, app, size);
     }
+    if let Some(ref msg) = app.error_modal {
+        draw_error_modal(f, msg, app.fatal, size);
+    }
 }
 
 // ── Title bar ────────────────────���──────────────────────
@@ -698,4 +701,85 @@ fn draw_exclude_modal(f: &mut Frame, app: &App, area: Rect) {
 
     let content = Paragraph::new(lines);
     f.render_widget(content, inner);
+}
+
+// ── Error modal ─────────────────────────────────────────
+
+fn draw_error_modal(f: &mut Frame, msg: &str, fatal: bool, area: Rect) {
+    // Use most of the screen so long errors wrap and are fully visible
+    let max_w = (area.width.saturating_sub(4)).min(76);
+    let max_h = area.height.saturating_sub(4);
+
+    // Word-wrap the message to fit the modal width
+    let inner_w = max_w.saturating_sub(4) as usize; // account for border + padding
+    let wrapped = word_wrap(msg, inner_w);
+    let content_lines = wrapped.len() as u16;
+    let modal_h = (content_lines + 6).min(max_h); // +6 for title, spacing, help line, borders
+
+    let x = (area.width.saturating_sub(max_w)) / 2;
+    let y = (area.height.saturating_sub(modal_h)) / 2;
+    let modal_area = Rect::new(area.x + x, area.y + y, max_w, modal_h);
+
+    f.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(RED))
+        .title(" Error ")
+        .title_style(Style::default().fg(RED).add_modifier(Modifier::BOLD));
+
+    let inner = block.inner(modal_area);
+    f.render_widget(block, modal_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    for line_str in &wrapped {
+        lines.push(Line::from(Span::styled(
+            line_str.clone(),
+            Style::default().fg(TEXT),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    let dismiss = if fatal {
+        "Press any key to quit"
+    } else {
+        "Press any key to dismiss"
+    };
+    lines.push(Line::from(Span::styled(
+        dismiss,
+        Style::default().fg(DIM),
+    )));
+
+    let content = Paragraph::new(lines).wrap(Wrap { trim: false });
+    f.render_widget(content, inner);
+}
+
+fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        if raw_line.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        for word in raw_line.split_whitespace() {
+            if current.is_empty() {
+                current = word.to_string();
+            } else if current.len() + 1 + word.len() <= width {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                lines.push(current);
+                current = word.to_string();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
