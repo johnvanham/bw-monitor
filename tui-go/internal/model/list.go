@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/johnvanham/bw-monitor/internal/ui"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/ui"
 )
 
 // RenderTitleBar renders the app title bar with a left title and right context label.

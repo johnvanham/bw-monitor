@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/johnvanham/bw-monitor/internal/redis"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/redis"
 )
 
 const filterFileName = ".bw-monitor-filter"

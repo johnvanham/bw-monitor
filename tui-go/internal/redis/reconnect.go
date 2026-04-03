@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/johnvanham/bw-monitor/internal/k8s"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/k8s"
 )
 
 // Reconnector manages the port-forward and Redis client lifecycle,

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	useragent "github.com/mileusna/useragent"
-	"github.com/johnvanham/bw-monitor/internal/redis"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/redis"
 )
 
 // Column widths

@@ -7,8 +7,8 @@ import (
 
 	"github.com/biter777/countries"
 	useragent "github.com/mileusna/useragent"
-	"github.com/johnvanham/bw-monitor/internal/redis"
-	"github.com/johnvanham/bw-monitor/internal/ui"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/redis"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/ui"
 )
 
 // BuildDetailContent builds the full content string for a report detail view.

@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/johnvanham/bw-monitor/internal/redis"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/redis"
 )
 
 // InitialLoadMsg carries the initial batch of reports loaded from Redis.

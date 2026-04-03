@@ -1,4 +1,4 @@
-module github.com/johnvanham/bw-monitor
+module github.com/johnvanham/bw-monitor/tui-go
 
 go 1.25.8
 

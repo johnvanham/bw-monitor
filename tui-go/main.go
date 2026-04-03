@@ -7,9 +7,9 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/johnvanham/bw-monitor/internal/k8s"
-	"github.com/johnvanham/bw-monitor/internal/model"
-	"github.com/johnvanham/bw-monitor/internal/redis"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/k8s"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/model"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/redis"
 )
 
 func main() {

@@ -7,8 +7,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/biter777/countries"
-	"github.com/johnvanham/bw-monitor/internal/redis"
-	"github.com/johnvanham/bw-monitor/internal/ui"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/redis"
+	"github.com/johnvanham/bw-monitor/tui-go/internal/ui"
 )
 
 // rebuildBansContent builds the content lines for the bans viewport
