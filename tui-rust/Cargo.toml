@@ -1,0 +1,42 @@
+[package]
+name = "bw-monitor"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UI for streaming BunkerWeb block reports and bans from Kubernetes"
+license = "MIT"
+
+[[bin]]
+name = "bw-monitor"
+path = "src/main.rs"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Kubernetes
+kube = { version = "0.98", features = ["client", "runtime", "ws"] }
+k8s-openapi = { version = "0.24", features = ["v1_32"] }
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# DNS
+dns-lookup = "2"
+
+# Home directory
+dirs = "5"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+chrono = "0.4"
+anyhow = "1"
